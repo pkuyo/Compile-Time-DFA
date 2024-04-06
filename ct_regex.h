@@ -1,5 +1,5 @@
 //
-// Created by dell on 2024/4/5.
+// Created by pkuyo on 2024/4/5.
 //
 
 #ifndef CLION_CT_REGEX_H
@@ -21,6 +21,7 @@ class CompileTimeNode {
 
     template<typename T, size_t ...N>
     constexpr CompileTimeNode(T, __int64 index, bool isEnd, std::index_sequence<N...>) : index(index), isEnd(isEnd) {
+        std::fill(paths,paths + 256,-1);
         (AddNewPath(T::ConnectionChecks::template value<N>, T::Connections::template value<N>), ...);
     }
 
@@ -101,50 +102,72 @@ namespace pkuyo_detail {
     consteval int SymbolSpeed(char c) {
         if (c == '|' || c == '&')
             return 2;
-        if (c == '*')
+        if (c == '*' || c == '?')
             return 3;
-        if (c == '(' || c == '-')
+        if (c == '(' || c == ')')
             return 1;
         return 0;
     }
 
     consteval bool IsSingle(char c) { return SymbolSpeed(c) == 3; }
 
-    consteval bool IsSymbol(char c) { return SymbolSpeed(c) != 0; }
+    consteval bool IsExecSymbol(char c) { return SymbolSpeed(c) != 0; }
 
-    consteval bool IsTwoSideSymbol(char c) { return (SymbolSpeed(c) != 0 && !IsSingle(c)) || c == ')'; }
+    consteval bool IsTwoSideSymbol(char c) { return (SymbolSpeed(c) != 0 && !IsSingle(c)); }
+
+    consteval bool IsLatePreprocessSymbol(char c) {
+        return c == '-';
+    }
+    consteval bool IsHeadPreprocessSymbol(char c) {
+        return false;
+    }
+
+    //preprocess input regex
+    template<ct_stringData cts, ct_stringData out = "">
+    consteval auto ctOpera() {
+        if constexpr (cts.size == 1)
+            return CompileTimeString<out>();
+        else if constexpr (out.size == 1 || IsExecSymbol(cts.First()) || IsLatePreprocessSymbol(cts.First())) {
+            return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.Append(cts.First())>();
+        } else if constexpr (IsLatePreprocessSymbol(out.Last())) {
+            if constexpr (out.Last() == '-') {
+                if constexpr (out.Last(1) == cts.First())
+                    return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.template SubStr<0, out.size - 1>()>();
+                else
+                    return ctOpera<cts, out.template SubStr<0, out.size - 1>().Append('|').Append(
+                            out.Last(1) + 1).Append('-')>();
+            }
+            else {
+                static_assert(false,"What");
+            }
+        } else if constexpr (IsHeadPreprocessSymbol(cts.First())){
+            static_assert(false,"What");
+        }
+        else if constexpr (!IsTwoSideSymbol(out.Last()) || out.Last() == ')') {
+            return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.Append('&').Append(cts.First())>();
+        } else
+            return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.Append(cts.First())>();
+    }
 
     //nfa node graph
-    template<char check, size_t index, int toIndex1 = -1, int toIndex2 = -1>
+    template<char check, size_t index, typename list = ct_list<>>
     struct NfaNode {
-        template<int toIndex>
-        static auto _extend() {
-            if constexpr (toIndex1 == -1)
-                return NfaNode<check, index, toIndex, -1>();
-            else if constexpr (toIndex2 == -1)
-                return NfaNode<check, index, toIndex1, toIndex>();
-        }
 
         template<int toIndex>
-        using ConnectTo = decltype(_extend<toIndex>());
+        using ConnectTo = NfaNode<check, index, typename list::template Append<toIndex>>;
 
         static constexpr size_t _index = index;
-
         static constexpr char _check = check;
 
-        static constexpr size_t _toIndex1 = toIndex1;
-        static constexpr size_t _toIndex2 = toIndex2;
-
-
+        using ConnectList = list;
     };
 
-    template<size_t index,bool hasMatched = false,typename CurrentFindNode = ct_empty>
+    template<size_t index, bool hasMatched = false, typename CurrentFindNode = ct_empty>
     struct NfaNodeSearcher {
         template<typename NextNode>
-        auto operator|(NextNode)
-        {
+        auto operator|(NextNode) {
             if constexpr (!hasMatched && index == NextNode::_index)
-                return NfaNodeSearcher<index,true,NextNode>();
+                return NfaNodeSearcher<index, true, NextNode>();
             else
                 return NfaNodeSearcher();
         }
@@ -169,7 +192,8 @@ namespace pkuyo_detail {
         using AppendNode = NfaNodeGraph<NodeTypes..., T...>;
 
         template<char check>
-        using AppendNormalNode = NfaNodeGraph<NodeTypes..., NfaNode<check, size, size + 1>, NfaNode<'\0', size + 1>>;
+        using AppendNormalNode = NfaNodeGraph<NodeTypes..., NfaNode<check, size, ct_list<size + 1>>, NfaNode<'\0',
+                size + 1>>;
 
 
         template<size_t index>
@@ -186,11 +210,14 @@ namespace pkuyo_detail {
 
 
     //stack in building nfa
-    template<size_t inIndex, size_t outIndex = inIndex + 1>
+    template<char check, size_t inIndex, size_t outIndex = inIndex + 1>
     struct NfaIndex {
         static constexpr int _inIndex = inIndex;
         static constexpr int _outIndex = outIndex;
+
+        static constexpr char _check = check;
     };
+
     template<typename... IndexTypes>
     struct NfaIndexStack;
 
@@ -216,6 +243,13 @@ namespace pkuyo_detail {
     struct NfaStackRemoveType<Stack, count, std::enable_if_t<Stack::size <= count - 1>> {
         using Type = NfaIndexStack<>;
     };
+    template<typename Stack>
+    struct nfa_stack_last_check {
+        using Last = typename Stack::LastType;
+        static constexpr char value = Last::_check;
+    };
+    template<typename Stack>
+    constexpr char nfa_stack_last_check_v = nfa_stack_last_check<Stack>::value;
 
     template<typename... IndexTypes>
     struct NfaIndexStack {
@@ -229,8 +263,8 @@ namespace pkuyo_detail {
         template<typename ...T>
         using AppendType = NfaIndexStack<IndexTypes..., T...>;
 
-        template<size_t ...I>
-        using AppendIndex = NfaIndexStack<IndexTypes..., NfaIndex<I>...>;
+        template<char c, size_t i>
+        using AppendIndex = NfaIndexStack<IndexTypes..., NfaIndex<c, i>>;
 
         template<size_t start, size_t count>
         using SubType = decltype(_Sub<start>(std::make_index_sequence<count>()));
@@ -255,47 +289,74 @@ namespace pkuyo_detail {
 
 
     //executions for building nfa
-    namespace nfaExecute
-    {
-        template<char c, typename Graph, typename Stack,typename = void/*check if items in stack is enough*/>
+    namespace nfaExecute {
+        template<char c, typename Graph, typename Stack, typename = void>
         struct NfaExecute;
 
         template<typename Graph, typename Stack>
-        struct NfaExecute<'|', Graph, Stack, std::enable_if_t<Stack::size >=2> > {
+        struct NfaExecute<'|', Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> != '\0'>> {
             using Index2 = typename Stack::LastType;
             using Index1 = typename Stack::LastLastType;
 
-            using EmitNode1 = NfaNode<'\0', Graph::size, Index1::_inIndex, Index2::_inIndex>;
+            using EmitNode1 = NfaNode<'\0', Graph::size, ct_list<Index1::_inIndex, Index2::_inIndex>>;
             using EmitNode2 = NfaNode<'\0', Graph::size + 1>;
 
-            using OutStack = typename Stack::template RemoveType<2>::template AppendType<NfaIndex<Graph::size>>;
+            using OutStack = typename Stack::template RemoveType<2>::template AppendType<NfaIndex<'\0', Graph::size>>;
 
             using OutGraph = typename Graph::template ReplaceIndexGraph<Index1::_outIndex, Graph::size + 1>::
             template ReplaceIndexGraph<Index2::_outIndex, Graph::size + 1>::
             template AppendNode<EmitNode1, EmitNode2>;
 
         };
+        template<typename Graph, typename Stack>
+        struct NfaExecute<'|', Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> == '\0'>> {
+            using Index1 = typename Stack::LastLastType;
+            using RootIndex = typename Stack::LastType;
+
+            using OutStack = typename Stack::template RemoveType<2>::template AppendType<RootIndex>;
+
+            using OutGraph = typename Graph::template ReplaceIndexGraph<Index1::_outIndex, RootIndex::_outIndex>::
+            template ReplaceIndexGraph<RootIndex::_inIndex, Index1::_inIndex>;
+
+        };
 
         template<typename Graph, typename Stack>
-        struct NfaExecute<'&', Graph, Stack,std::enable_if_t<Stack::size >=2>> {
+        struct NfaExecute<'?', Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> != '\0'>> {
+            using Index = typename Stack::LastType;
+
+            using EmitNode = NfaNode<'\0', Graph::size, ct_list<Index::_outIndex, Index::_inIndex>>;
+
+            using OutStack = typename Stack::template RemoveType<1>::template AppendType<NfaIndex<'\0', Graph::size, Index::_outIndex>>;
+            using OutGraph = typename Graph::template AppendNode<EmitNode>;
+        };
+        template<typename Graph, typename Stack>
+        struct NfaExecute<'?', Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> == '\0'>> {
+            using Index = typename Stack::LastType;
+            using OutStack = Stack;
+            using OutGraph = typename Graph::template ReplaceIndexGraph<Index::_inIndex, Index::_outIndex>;
+
+        };
+
+        template<typename Graph, typename Stack>
+        struct NfaExecute<'&', Graph, Stack, void> {
             using Index2 = typename Stack::LastType;
             using Index1 = typename Stack::LastLastType;
 
 
-            using OutStack = typename Stack::template RemoveType<2>::template AppendType<NfaIndex<Index1::_inIndex, Index2::_outIndex>>;
+            using OutStack = typename Stack::template RemoveType<2>::template AppendType<NfaIndex<Index1::_check, Index1::_inIndex, Index2::_outIndex>>;
 
             using OutGraph = typename Graph::template ReplaceIndexGraph<Index1::_outIndex, Index2::_inIndex>;
 
         };
 
         template<typename Graph, typename Stack>
-        struct NfaExecute<'*', Graph, Stack,std::enable_if_t<Stack::size >=1>> {
+        struct NfaExecute<'*', Graph, Stack, void> {
             using Index = typename Stack::LastType;
 
-            using EmitNode1 = NfaNode<'\0', Graph::size, Index::_inIndex, Graph::size + 1>;
+            using EmitNode1 = NfaNode<'\0', Graph::size, ct_list<Index::_inIndex, Graph::size + 1>>;
             using EmitNode2 = NfaNode<'\0', Graph::size + 1>;
 
-            using OutStack = typename Stack::template RemoveType<1>::template AppendType<NfaIndex<Graph::size>>;
+            using OutStack = typename Stack::template RemoveType<1>::template AppendType<NfaIndex<'\0', Graph::size>>;
 
             using OutGraph = typename Graph::template ReplaceIndexGraph<Index::_outIndex, Index::_inIndex>::
             template ReplaceIndexGraph<Index::_outIndex, Graph::size + 1>::
@@ -316,9 +377,7 @@ namespace pkuyo_detail {
             } else {
                 return NfaData<NfaGraph, NfaStack::LastType::_inIndex, NfaStack::LastType::_outIndex>();
             }
-        }
-
-        else if constexpr (cts.First() == ')') {
+        } else if constexpr (cts.First() == ')') {
 
             if constexpr (symbol.Last() == '(') {
                 if constexpr (NfaStack::size == 1)
@@ -327,13 +386,12 @@ namespace pkuyo_detail {
                 else
                     return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.template SubStr<0,
                             symbol.size - 1>().Append('&'), NfaStack, NfaGraph>();
-            }
-            else {
+            } else {
                 using Exec = nfaExecute::NfaExecute<symbol.Last(), NfaGraph, NfaStack>;
                 return connectNfa<cts, symbol.template SubStr<0,
                         symbol.size - 1>(), typename Exec::OutStack, typename Exec::OutGraph>();
             }
-        } else if constexpr (IsSymbol(cts.First())) {
+        } else if constexpr (IsExecSymbol(cts.First())) {
 
             if constexpr (IsSingle(cts.First())) {
                 using Exec = nfaExecute::NfaExecute<cts.First(), NfaGraph, NfaStack>;
@@ -342,44 +400,20 @@ namespace pkuyo_detail {
             } else if constexpr (symbol.size == 1) {
                 return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.Append(
                         cts.First()), NfaStack, NfaGraph>();
-            }
-            else if constexpr (SymbolSpeed(cts.First()) >= SymbolSpeed(symbol.Last())) {
+            } else if constexpr (SymbolSpeed(cts.First()) >= SymbolSpeed(symbol.Last())) {
                 return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.Append(
                         cts.First()), NfaStack, NfaGraph>();
-            }
-
-            else {
+            } else {
                 using Exec = nfaExecute::NfaExecute<symbol.Last(), NfaGraph, NfaStack>;
                 return connectNfa<cts, symbol.template SubStr<0,
                         symbol.size - 1>(), typename Exec::OutStack, typename Exec::OutGraph>();
             }
         } else
             return connectNfa<cts.template SubStr<1,
-                    cts.size - 1>(), symbol, typename NfaStack::template AppendIndex<NfaGraph::size>,
+                    cts.size - 1>(), symbol, typename NfaStack::template AppendIndex<cts.First(), NfaGraph::size>,
                     typename NfaGraph::template AppendNormalNode<cts.First()>>();
     }
 
-    //preprocess input regex
-    template<ct_stringData cts, ct_stringData out = "">
-    consteval auto ctOpera() {
-        if constexpr (cts.size == 1)
-            return CompileTimeString<out>();
-        else {
-
-            if constexpr (out.size == 1 || IsTwoSideSymbol(cts.First()) || IsSingle(cts.First())) {
-                return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.Append(cts.First())>();
-            } else if constexpr (!IsTwoSideSymbol(out.Last()) || out.Last() == ')') {
-                return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.Append('&').Append(cts.First())>();
-            }else if constexpr (out.Last() == '-') {
-                if constexpr (out.Last(1) == cts.First())
-                    return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.template SubStr<0, out.size - 1>()>();
-                else
-                    return ctOpera<cts, out.template SubStr<0, out.size - 1>().Append('|').Append(
-                            out.Last(1) + 1).Append('-')>();
-            } else
-                return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.Append(cts.First())>();
-        }
-    }
 
     template<ct_stringData cts, typename list = ct_list<>>
     consteval auto getAllState() {
@@ -392,56 +426,18 @@ namespace pkuyo_detail {
             return getAllState<cts.template SubStr<1, cts.size - 1>(), list>();
     }
 
-    template<char check, size_t nowIndex, size_t dir, typename graph, typename toList = ct_list<>>
-    consteval auto eClosure_dfs_impl() {
-        using NowNode = typename graph::template FindType<nowIndex>;
-
-        if constexpr (NowNode::_check == check) {
-            if constexpr (dir == 1 && NowNode::_toIndex1 != -1 && !toList::template contains<NowNode::_toIndex1>) {
-                using Left = decltype(eClosure_dfs_impl<check, NowNode::_toIndex1, 1, graph, typename toList::template Append<NowNode::_toIndex1>>());
-                return eClosure_dfs_impl<check, NowNode::_toIndex1, 2, graph, Left>();
-            } else if constexpr (NowNode::_toIndex2 != -1 && !toList::template contains<NowNode::_toIndex2>) {
-                using Left = decltype(eClosure_dfs_impl<check, NowNode::_toIndex2, 1, graph, typename toList::template Append<NowNode::_toIndex2>>());
-                return eClosure_dfs_impl<check, NowNode::_toIndex2, 2, graph, Left>();
-            } else
-                return toList();
-        } else
-            return toList();
-    }
 
     template<char check, size_t nowIndex, typename graph>
-    consteval auto eClosure_single() {
-        using Left = decltype(eClosure_dfs_impl<check, nowIndex, 1, graph, ct_list<>::Append<nowIndex>>());
-        return eClosure_dfs_impl<check, nowIndex, 2, graph, Left>();
-    }
-
-
-    template<char check, size_t nowIndex, typename graph>
-    consteval auto moveState_impl() {
-        using NowNode = typename graph::template FindType<nowIndex>;
-        if constexpr (NowNode::_check == check) {
-            if constexpr (NowNode::_toIndex1 != -1 && NowNode::_toIndex2 != -1)
-                return ct_list < NowNode::_toIndex1, NowNode::_toIndex2 > ();
-            else if constexpr (NowNode::_toIndex1 != -1)
-                return ct_list < NowNode::_toIndex1 > ();
-            else if constexpr (NowNode::_toIndex1 != -1)
-                return ct_list < NowNode::_toIndex2 > ();
-            else
-                return ct_list < > ();
-        } else
-            return ct_list < > ();
-    }
-
+    using MoveStep = std::conditional_t<check == graph::template FindType<nowIndex>::_check,
+            typename graph::template FindType<nowIndex>::ConnectList, ct_list<>>;
 
     template<char check, typename list, typename graph, size_t N = list::size>
     consteval auto move() {
         constexpr size_t nowIndex = list::template value<N>;
         if constexpr (N == 0) {
-            return moveState_impl<check, nowIndex, graph>();
-        }
-
-        else if constexpr (graph::template FindType<nowIndex>::_check == check) {
-            return merge_list_t<decltype(moveState_impl<check, nowIndex, graph>()),
+            return MoveStep<check, nowIndex, graph>();
+        } else if constexpr (graph::template FindType<nowIndex>::_check == check) {
+            return merge_list_t<MoveStep<check, nowIndex, graph>,
                     decltype(move<check, list, graph, N - 1>())>();
         } else {
             return move<check, list, graph, N - 1>();
@@ -453,7 +449,9 @@ namespace pkuyo_detail {
         if constexpr (sizeof...(N) == 0)
             return ct_list < > ();
         else
-            return (moveState_impl<check, list::template value<N>, graph>() | ... | ct_list<>());
+            return (MoveStep<check, list::template value<N>, graph>() | ... | ct_list
+        <>
+        ());
     }
 
 
@@ -468,6 +466,10 @@ namespace pkuyo_detail {
     }
 
 
+    template<char check, size_t nowIndex, typename graph>
+    consteval auto eClosure_single() {
+        return eClosure<check, ct_list<nowIndex>, graph>();
+    }
 
     template<size_t index, typename state, bool isEnd = false, typename toIndex = ct_list<>, typename toCheck = ct_list<>>
     struct DfaNode {
@@ -484,13 +486,13 @@ namespace pkuyo_detail {
 
         using State = state;
     };
-    template<typename FindState,bool hasMatched = false,typename CurrentFindNode = ct_empty>
+
+    template<typename FindState, bool hasMatched = false, typename CurrentFindNode = ct_empty>
     struct DfaNodeSearcher {
         template<typename NextNode>
-        auto operator|(NextNode)
-        {
-            if constexpr (!hasMatched && is_value_equal_v<FindState,typename NextNode::State>)
-                return DfaNodeSearcher<FindState,true,NextNode>();
+        auto operator|(NextNode) {
+            if constexpr (!hasMatched && is_value_equal_v<FindState, typename NextNode::State>)
+                return DfaNodeSearcher<FindState, true, NextNode>();
             else
                 return DfaNodeSearcher();
         }
@@ -510,7 +512,6 @@ namespace pkuyo_detail {
 
 
     template<typename... Nodes>
-        requires (sizeof...(Nodes) < 1000)
     struct DfaGraph {
         static constexpr size_t size = sizeof...(Nodes);
 
@@ -519,6 +520,7 @@ namespace pkuyo_detail {
         static auto find() {
             return (DfaNodeSearcher<FindState>() | ... | Nodes());
         }
+
     public:
 
         template<typename ...T>
@@ -580,12 +582,13 @@ namespace pkuyo_detail {
 
     template<ct_stringData regex>
     struct RegexDefine {
-        using useRegex = decltype(pkuyo_detail::ctOpera<regex>());
+        static constexpr auto rawRegex = regex;
+        static constexpr auto useRegex = decltype(pkuyo_detail::ctOpera<regex>())::value;
 
-        using NfaData = decltype(pkuyo_detail::connectNfa<useRegex::value>());
+        using NfaData = decltype(pkuyo_detail::connectNfa<useRegex>());
         using NfaGraph = typename NfaData::Graph;
 
-        using StateList = decltype(pkuyo_detail::getAllState<useRegex::value>());
+        using StateList = decltype(pkuyo_detail::getAllState<useRegex>());
         using InitState = decltype(pkuyo_detail::eClosure_single<'\0', NfaData::start, NfaGraph>());
         using DfaGraph = decltype(pkuyo_detail::buildDfa_impl<NfaGraph, DfaGraph<DfaNode<0, InitState>>, 0, StateList, NfaData::end>());
     };
