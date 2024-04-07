@@ -122,94 +122,16 @@ private:
             nodes[i] = CompileTimeNode(stateChecks[i],stateConnects[i],i, i == 0);
     }
 
-
-
-    template<typename MoveList,size_t size>
-    consteval static auto Minimize_impl(const CompileTimeDfa & dfa)
+    consteval static void Dfs_findUnreachable(const CompileTimeDfa & dfa, bool reachable[],int currentNode = 0)
     {
-
-        char stateChecks[size][MoveList::size+1]{0};
-        size_t stateConnectLength[size]{0};
-        size_t stateConnects[size][MoveList::size+1]{0};
-
-        size_t newStateUse = 1;
-        size_t hasMovetoNewStateCount = 0;
-        auto move = MoveList::data;
-        //current state => new merged state map
-        __int64 newStates[size]{-1};
-
-        for(size_t i=0;i<size;i++) {
-            if (dfa.nodes[i].IsEnd()) {
-                newStates[i] = 0;
-                hasMovetoNewStateCount++;
-            }
+        reachable[currentNode] = true;
+        for(int i=0;i<dfa.nodes[currentNode].currentLength;i++){
+            if(!reachable[dfa.nodes[currentNode].pathConnects[i]])
+                Dfs_findUnreachable(dfa,reachable, dfa.nodes[currentNode].pathConnects[i]);
         }
-
-        while(hasMovetoNewStateCount != size) {
-            bool hasNewState = false;
-            for(size_t i =0; i< size;i++){
-                if(newStates[i] != -1) continue;
-
-                size_t connectionCount = 0;
-                bool canMerged = true;
-                if(hasNewState)
-                {
-                    for(size_t j = 0; j < dfa.nodes[i].currentLength;j++) {
-
-                        if (newStates[dfa.nodes[i].pathConnects[j]] == -1) {//reached unmerged state
-                            canMerged = false;
-                            break;
-                        }
-                        //current node can't merge with new state.
-                        if (stateChecks[newStateUse - 1][connectionCount] != dfa.nodes[i].pathChecks[j] ||
-                            stateConnects[newStateUse - 1][connectionCount++] !=
-                            newStates[dfa.nodes[i].pathConnects[j]]) {
-                            canMerged = false;
-                            break;
-                        }
-                    }
-                    if(canMerged && stateConnectLength[newStateUse-1] == connectionCount) {
-                        newStates[i] = newStateUse-1;
-                        hasMovetoNewStateCount++;
-                    }
-                    continue;
-                }
-
-
-                for(size_t j = 0; j <dfa.nodes[i].currentLength;j++) {
-                    if (newStates[dfa.nodes[i].pathConnects[j]] == -1) {//reached unmerged state
-                        canMerged = false;
-                        break;
-                    }
-                    stateConnects[newStateUse][connectionCount] = newStates[dfa.nodes[i].pathConnects[j]];
-                    stateChecks[newStateUse][connectionCount++] = dfa.nodes[i].pathChecks[j];
-
-                }
-
-                if(canMerged) {
-                    hasNewState = true;
-                    stateConnectLength[newStateUse] = connectionCount;
-                    newStates[i] = newStateUse++;
-                    hasMovetoNewStateCount++;
-                }
-            }
-        }
-        //add remain connections
-        for(size_t i=0;i< size;i++){
-            int connectionCount = 0;
-            for(size_t j = 0; j <dfa.nodes[i].currentLength;j++) {
-                if(connectionCount >= stateConnectLength[newStates[i]]){
-                    stateConnectLength[newStates[i]]++;
-                    stateConnects[newStates[i]][connectionCount] = newStates[dfa.nodes[i].pathConnects[j]];
-                    stateChecks[newStates[i]][connectionCount] = dfa.nodes[i].pathChecks[j];
-                }
-                connectionCount++;
-            }
-        }
-        for(size_t i=0;i<newStateUse;i++)
-            stateChecks[i][stateConnectLength[i]] = '\0'; //add '\0' for sign of end.
-        return MinimizeData(stateChecks,stateConnects,newStateUse);
     }
+
+
 
 public:
 
@@ -238,7 +160,7 @@ public:
 namespace pkuyo_detail {
 
     //character operation functions
-    enum
+    enum RegexEscapeChar
     {
         REC_OR = 1,         // '|'
         REC_AND = 2,        // '&'
@@ -251,7 +173,7 @@ namespace pkuyo_detail {
         REC_TO = 9,         // '-'
         REC_EMPTY = 10,     // ' '
         REC_ADD = 11,       // '+'
-    }RegexEscapeChar;
+    };
 
     constexpr int SymbolSpeed(char c) {
         if (c == REC_OR || c == REC_AND)
@@ -840,14 +762,10 @@ namespace pkuyo_detail {
         auto operator|(DfaNewState<checkChar, end, stateList, currentIndex>) {
             using NewState = stateList;
             using CurrentNode = Node<currentIndex>;
-
             if constexpr (contains<NewState>)
                 return ConnectNode<CurrentNode, Find<NewState>::_index, checkChar>();
-
             else
                 return typename Append<DfaNode<size, NewState, end>>::template ConnectNode<CurrentNode, size, checkChar>();
-
-
         }
     };
 
@@ -883,12 +801,6 @@ namespace pkuyo_detail {
         return CompileTimeDfa<CompileTimeString<cts>, Dfa::size>(std::make_index_sequence<Dfa::size>(), Dfa());
     }
 
-    template<typename Dfa, ct_stringData cts,typename MoveList>
-    consteval auto CreateMinimizeExecuteDfa() {
-        constexpr auto dfa = CompileTimeDfa<CompileTimeString<cts>, Dfa::size>(std::make_index_sequence<Dfa::size>(), Dfa());
-        constexpr auto minimizeData = decltype(dfa)::template Minimize_impl<MoveList,Dfa::size>(dfa);
-        return CompileTimeDfa<CompileTimeString<cts>,minimizeData.minimizeLength>(minimizeData.stateChecks,minimizeData.stateConnects);
-    }
 
     template<ct_stringData regex>
     struct RegexDefine {
@@ -907,11 +819,13 @@ namespace pkuyo_detail {
 //define and create a regex at compile time
 template<ct_stringData regex,bool minimize = false>
 consteval auto DefineRegex() {
-    if constexpr (minimize)
-        return  pkuyo_detail::CreateMinimizeExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph,
-        regex,typename pkuyo_detail::RegexDefine<regex>::StateList>();
-    else
-        return pkuyo_detail::CreateExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph, regex,typename pkuyo_detail::RegexDefine<regex>::StateList>();
+    //TODO:Rewrite the minimization algorithm
+    //if constexpr (minimize)
+    //   return  pkuyo_detail::CreateMinimizeExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph,
+    //   regex,typename pkuyo_detail::RegexDefine<regex>::StateList>();
+    static_assert(!minimize,"Rewrite the minimization algorithm");
+    //else
+    return pkuyo_detail::CreateExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph, regex,typename pkuyo_detail::RegexDefine<regex>::StateList>();
 }
 
 #endif //COMPILETIMEDFA_CT_REGEX_H

@@ -2,7 +2,7 @@
 // Created by pkuyo on 2024/4/5.
 //
 
-//Testing platform : windows 11, gcc 13.2, stdc++20
+//Testing platform : Windows 11, gcc 13.2, stdc++20
 
 //Recommended compilation options:
 //  -fconstexpr-loop-limit=1000000000
