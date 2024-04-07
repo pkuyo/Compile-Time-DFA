@@ -2,8 +2,8 @@
 // Created by pkuyo on 2024/4/5.
 //
 
-#ifndef CLION_CT_STRING_H
-#define CLION_CT_STRING_H
+#ifndef COMPILETIMEDFA_CT_STRING_H
+#define COMPILETIMEDFA_CT_STRING_H
 
 #include <algorithm>
 
@@ -95,4 +95,4 @@ consteval auto operator ""_ct() {
 }
 
 
-#endif //CLION_CT_STRING_H
+#endif //COMPILETIMEDFA_CT_STRING_H

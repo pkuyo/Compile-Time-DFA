@@ -2,8 +2,8 @@
 // Created by pkuyo on 2024/4/5.
 //
 
-#ifndef CLION_CT_UTILS_H
-#define CLION_CT_UTILS_H
+#ifndef COMPILETIMEDFA_CT_UTILS_H
+#define COMPILETIMEDFA_CT_UTILS_H
 
 namespace pkuyo_detail{
 
@@ -24,4 +24,4 @@ namespace pkuyo_detail{
     }
 }
 
-#endif //CLION_CT_UTILS_H
+#endif //COMPILETIMEDFA_CT_UTILS_H

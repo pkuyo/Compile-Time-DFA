@@ -2,9 +2,8 @@
 // Created by pkuyo on 2024/4/5.
 //
 
-#ifndef CLION_CT_REGEX_H
-#define CLION_CT_REGEX_H
-#pragma once
+#ifndef COMPILETIMEDFA_CT_REGEX_H
+#define COMPILETIMEDFA_CT_REGEX_H
 
 #include <string_view>
 #include <type_traits>
@@ -22,12 +21,16 @@ namespace pkuyo_detail
 }
 
 class CompileTimeNode {
+
     __int64 index = -1;
     __int64 pathConnects[256]{0};
     char pathChecks[256]{0};
     bool isEnd = false;
 
     size_t currentLength = 0;
+
+private:
+
     template<typename T/*DfaNode*/, size_t ...N>
     constexpr CompileTimeNode(T, __int64 index, bool isEnd, std::index_sequence<N...>) : index(index), isEnd(isEnd) {
 
@@ -74,6 +77,15 @@ class CompileTimeDfa;
 
 template<ct_stringData cts, size_t length>
 class CompileTimeDfa<CompileTimeString<cts>, length> {
+
+    CompileTimeNode nodes[length]{};
+
+public:
+
+    static constexpr auto rawString = cts;
+    constexpr static size_t size = length;
+
+private:
 
     template<size_t moveSize>
     struct MinimizeData
@@ -177,7 +189,6 @@ class CompileTimeDfa<CompileTimeString<cts>, length> {
                 if(canMerged) {
                     hasNewState = true;
                     stateConnectLength[newStateUse] = connectionCount;
-                    //stateChecks[newStateUse][connectionCount] = '\0'; //set sign of state end
                     newStates[i] = newStateUse++;
                     hasMovetoNewStateCount++;
                 }
@@ -196,16 +207,11 @@ class CompileTimeDfa<CompileTimeString<cts>, length> {
             }
         }
         for(size_t i=0;i<newStateUse;i++)
-            stateChecks[i][stateConnectLength[i]] = '\0';
+            stateChecks[i][stateConnectLength[i]] = '\0'; //add '\0' for sign of end.
         return MinimizeData(stateChecks,stateConnects,newStateUse);
     }
 
 public:
-
-    static constexpr auto rawString = cts;
-    constexpr static size_t size = length;
-
-    CompileTimeNode nodes[length]{};
 
     [[nodiscard]] constexpr bool CheckString(std::string_view view) const {
         __int64 node = 0;
@@ -218,11 +224,13 @@ public:
         return nodes[node].IsEnd();
     }
 
+
     template<typename Dfa, ct_stringData c,typename ctDfa>
     friend consteval auto pkuyo_detail::CreateExecuteDfa();
 
     template<typename Dfa, ct_stringData c,typename MoveList>
     friend consteval auto  pkuyo_detail::CreateMinimizeExecuteDfa();
+
 };
 
 
@@ -906,4 +914,4 @@ consteval auto DefineRegex() {
         return pkuyo_detail::CreateExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph, regex,typename pkuyo_detail::RegexDefine<regex>::StateList>();
 }
 
-#endif //CLION_CT_REGEX_H
+#endif //COMPILETIMEDFA_CT_REGEX_H
