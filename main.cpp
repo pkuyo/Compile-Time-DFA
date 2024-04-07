@@ -10,14 +10,12 @@ void checkString(const CompileTimeDfa<T,size>& regex, std::string_view instr){
 
 int main() {
 
+    //std::cout << "abcdefg"_ct.SubStr<2,("abcdefg"_ct).size - 2>().value << std::endl;
+    auto regex = DefineRegex<"\\([0-9]*(.[0-9]+)?\\)",false>();
+    std::cout << regex.CheckString("(2)")<< std::endl;
+    std::cout << regex.CheckString("(2.3)")<< std::endl;
+    std::cout << regex.CheckString("(2.)")<< std::endl;
 
-    //using Defined = pkuyo_detail::RegexDefine<"(a-z|_)(a-z|1-9|_)*">;
-    //cout << typeid(Defined::NfaGraph).name() << endl;
-    //cout << Defined::rawRegex.value << endl;
-    //cout << Defined::useRegex.value << endl;
-    //auto regex = DefineRegex<Defined::rawRegex>();
-
-    auto regex = DefineRegex<"(a-z|_)(a-z|1-9|_)*">();
     std::string str;
     std::cin >> str;
     checkString(regex,str);

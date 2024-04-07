@@ -3,8 +3,8 @@ project(CompileTimeDfa)
 
 set(CMAKE_CXX_STANDARD 20)
 
+add_compile_options(-fconstexpr-loop-limit=1000000000)
 add_compile_options(-fconstexpr-ops-limit=1000000000)
-
 add_executable(CompileTimeDfa main.cpp
         ct_list.h
         ct_string.h

@@ -15,18 +15,28 @@
 
 class CompileTimeNode {
     __int64 index = -1;
-    __int64 paths[256]{-1};
+    __int64 pathConnects[256]{0};
+    char pathChecks[256]{0};
     bool isEnd = false;
 
-
-    template<typename T, size_t ...N>
+    size_t currentLength = 0;
+    template<typename T/*DfaNode*/, size_t ...N>
     constexpr CompileTimeNode(T, __int64 index, bool isEnd, std::index_sequence<N...>) : index(index), isEnd(isEnd) {
-        std::fill(paths,paths + 256,-1);
+
         (AddNewPath(T::ConnectionChecks::template value<N>, T::Connections::template value<N>), ...);
     }
 
-    constexpr void AddNewPath(char c, __int64 index) {
-        paths[c] = index;
+    template<size_t length>
+    constexpr CompileTimeNode(const char (&stateChecks)[length],const size_t(&stateConnects)[length],__int64 index, bool isEnd)
+    : index(index), isEnd(isEnd) {
+        for(int i=0;i<length;i++){
+            if(stateChecks[i] == '\0') break;
+            AddNewPath(stateChecks[i],stateConnects[i]);
+        }
+    }
+    constexpr void AddNewPath(char c, __int64 toIndex) {
+        pathConnects[currentLength] = toIndex;
+        pathChecks[currentLength++] = c;
     }
 
     constexpr CompileTimeNode() = default;
@@ -34,17 +44,19 @@ class CompileTimeNode {
 public:
 
 
-    bool IsEnd() const {
+    [[nodiscard]] constexpr bool IsEnd() const {
         return isEnd;
     }
 
     __int64 NextPath(char c) const {
-        return paths[c];
+        for(int i=0;i<currentLength;i++)
+            if(pathChecks[i] == c)
+                return pathConnects[i];
+        return -1;
     }
 
     template<typename rawStr, size_t length>
-    friend
-    class CompileTimeDfa;
+    friend class CompileTimeDfa;
 
 };
 
@@ -54,6 +66,23 @@ class CompileTimeDfa;
 
 template<ct_stringData cts, size_t length>
 class CompileTimeDfa<CompileTimeString<cts>, length> {
+
+    template<size_t moveSize>
+    struct MinimizeData
+    {
+        char stateChecks[length][moveSize]{0};
+        size_t stateConnects[length][moveSize]{0};
+
+        size_t minimizeLength = 0;
+        constexpr MinimizeData(char (&inChecks)[length][moveSize], size_t(&inConnects)[length][moveSize],size_t newSize) : minimizeLength(newSize)
+        {
+            for(int i=0;i<size;i++) {
+                std::copy(inChecks[i],inChecks[i]+moveSize,stateChecks[i]);
+                std::copy(inConnects[i],inConnects[i]+moveSize,stateConnects[i]);
+            }
+        }
+    };
+
     template<typename Graph, size_t N>
     consteval void CreateExecuteDfa_single_impl(CompileTimeDfa *exec) {
         using Node = typename Graph::template Node<N>;
@@ -67,14 +96,110 @@ class CompileTimeDfa<CompileTimeString<cts>, length> {
         (CreateExecuteDfa_single_impl<Graph, N>(this), ...);
     }
 
+    template<size_t size,size_t charLength>
+    consteval CompileTimeDfa(const char (&stateChecks)[size][charLength],const size_t(&stateConnects)[size][charLength]) {
+        for(int i=0;i<length;i++)
+            nodes[i] = CompileTimeNode(stateChecks[i],stateConnects[i],i, i == 0);
+    }
+
+
+
+    template<typename MoveList,size_t size>
+    consteval static auto Minimize_impl(const CompileTimeDfa & dfa)
+    {
+
+        char stateChecks[size][MoveList::size+1]{0};
+        size_t stateConnectLength[size]{0};
+        size_t stateConnects[size][MoveList::size+1]{0};
+
+        size_t newStateUse = 1;
+        size_t hasMovetoNewStateCount = 0;
+        auto move = MoveList::data;
+        //current state => new merged state map
+        __int64 newStates[size]{-1};
+
+        for(size_t i=0;i<size;i++) {
+            if (dfa.nodes[i].IsEnd()) {
+                newStates[i] = 0;
+                hasMovetoNewStateCount++;
+            }
+        }
+
+        while(hasMovetoNewStateCount != size) {
+            bool hasNewState = false;
+            for(size_t i =0; i< size;i++){
+                if(newStates[i] != -1) continue;
+
+                size_t connectionCount = 0;
+                bool canMerged = true;
+                if(hasNewState)
+                {
+                    for(size_t j = 0; j < dfa.nodes[i].currentLength;j++) {
+
+                        if (newStates[dfa.nodes[i].pathConnects[j]] == -1) {//reached unmerged state
+                            canMerged = false;
+                            break;
+                        }
+                        //current node can't merge with new state.
+                        if (stateChecks[newStateUse - 1][connectionCount] != dfa.nodes[i].pathChecks[j] ||
+                            stateConnects[newStateUse - 1][connectionCount++] !=
+                            newStates[dfa.nodes[i].pathConnects[j]]) {
+                            canMerged = false;
+                            break;
+                        }
+                    }
+                    if(canMerged && stateConnectLength[newStateUse-1] == connectionCount) {
+                        newStates[i] = newStateUse-1;
+                        hasMovetoNewStateCount++;
+                    }
+                    continue;
+                }
+
+
+                for(size_t j = 0; j <dfa.nodes[i].currentLength;j++) {
+                    if (newStates[dfa.nodes[i].pathConnects[j]] == -1) {//reached unmerged state
+                        canMerged = false;
+                        break;
+                    }
+                    stateConnects[newStateUse][connectionCount] = newStates[dfa.nodes[i].pathConnects[j]];
+                    stateChecks[newStateUse][connectionCount++] = dfa.nodes[i].pathChecks[j];
+
+                }
+
+                if(canMerged) {
+                    hasNewState = true;
+                    stateConnectLength[newStateUse] = connectionCount;
+                    //stateChecks[newStateUse][connectionCount] = '\0'; //set sign of state end
+                    newStates[i] = newStateUse++;
+                    hasMovetoNewStateCount++;
+                }
+            }
+        }
+        //add remain connections
+        for(size_t i=0;i< size;i++){
+            int connectionCount = 0;
+            for(size_t j = 0; j <dfa.nodes[i].currentLength;j++) {
+                if(connectionCount >= stateConnectLength[newStates[i]]){
+                    stateConnectLength[newStates[i]]++;
+                    stateConnects[newStates[i]][connectionCount] = newStates[dfa.nodes[i].pathConnects[j]];
+                    stateChecks[newStates[i]][connectionCount] = dfa.nodes[i].pathChecks[j];
+                }
+                connectionCount++;
+            }
+        }
+        for(size_t i=0;i<newStateUse;i++)
+            stateChecks[i][stateConnectLength[i]] = '\0';
+        return MinimizeData(stateChecks,stateConnects,newStateUse);
+    }
+
 public:
 
     static constexpr auto rawString = cts;
     constexpr static size_t size = length;
 
-    CompileTimeNode nodes[size]{};
+    CompileTimeNode nodes[length]{};
 
-    bool CheckString(std::string_view view) const {
+    [[nodiscard]] constexpr bool CheckString(std::string_view view) const {
         __int64 node = 0;
         __int64 index = 0;
         while (index != view.size()) {
@@ -85,70 +210,207 @@ public:
         return nodes[node].IsEnd();
     }
 
-    template<typename Dfa, ct_stringData c>
+    template<typename Dfa, ct_stringData c,typename ctDfa>
     friend consteval auto CreateExecuteDfa();
 
-
+    template<typename Dfa, ct_stringData c,typename MoveList>
+    friend consteval auto CreateMinimizeExecuteDfa();
 };
 
-template<typename Dfa, ct_stringData cts>
+
+template<typename Dfa, ct_stringData cts,typename MoveList>
 consteval auto CreateExecuteDfa() {
     return CompileTimeDfa<CompileTimeString<cts>, Dfa::size>(std::make_index_sequence<Dfa::size>(), Dfa());
 }
 
+template<typename Dfa, ct_stringData cts,typename MoveList>
+consteval auto CreateMinimizeExecuteDfa() {
+    constexpr auto dfa = CompileTimeDfa<CompileTimeString<cts>, Dfa::size>(std::make_index_sequence<Dfa::size>(), Dfa());
+    constexpr auto minimizeData = decltype(dfa)::template Minimize_impl<MoveList,Dfa::size>(dfa);
+    return CompileTimeDfa<CompileTimeString<cts>,minimizeData.minimizeLength>(minimizeData.stateChecks,minimizeData.stateConnects);
+}
 namespace pkuyo_detail {
 
+    enum
+    {
+        REC_OR = 1,         // '|'
+        REC_AND = 2,        // '&'
+        REC_ANY = 3,        // '*'
+        REC_MAY = 4,        // '?'
+        REC_L_ROUND = 5,    // '('
+        REC_R_ROUND = 6,    // ')'
+        REC_L_SQUARE = 7,   // '['
+        REC_R_SQUARE = 8,   // ']'
+        REC_TO = 9,         // '-'
+        REC_EMPTY = 10,     // ' '
+        REC_ADD = 11,       // '+'
+    }RegexEscapeChar;
 
-    consteval int SymbolSpeed(char c) {
-        if (c == '|' || c == '&')
+    constexpr int SymbolSpeed(char c) {
+        if (c == REC_OR || c == REC_AND)
             return 2;
-        if (c == '*' || c == '?')
+        if (c == REC_ANY || c == REC_MAY || c == REC_ADD)
             return 3;
-        if (c == '(' || c == ')')
+        if (c == REC_L_ROUND || c == REC_R_ROUND)
             return 1;
         return 0;
     }
 
-    consteval bool IsSingle(char c) { return SymbolSpeed(c) == 3; }
-
-    consteval bool IsExecSymbol(char c) { return SymbolSpeed(c) != 0; }
-
-    consteval bool IsTwoSideSymbol(char c) { return (SymbolSpeed(c) != 0 && !IsSingle(c)); }
-
-    consteval bool IsLatePreprocessSymbol(char c) {
-        return c == '-';
+    constexpr char CharEscape(char c)
+    {
+        switch(c)
+        {
+            case '|':return REC_OR;
+            case '&':return REC_AND;
+            case '*':return REC_ANY;
+            case '?':return REC_MAY;
+            case '(':return REC_L_ROUND;
+            case ')':return REC_R_ROUND;
+            case '[':return REC_L_SQUARE;
+            case ']':return REC_R_SQUARE;
+            case '-':return REC_TO;
+            case ' ':return REC_EMPTY;
+            case '+':return REC_ADD;
+            default:return c;
+        }
     }
-    consteval bool IsHeadPreprocessSymbol(char c) {
-        return false;
+    constexpr char CharEscapeBack_DEBUG(char c)
+    {
+        switch(c)
+        {
+            case REC_OR:return '+';
+            case REC_AND: return '&';
+            case REC_ANY:return '*';
+            case REC_MAY:return '?';
+            case REC_L_ROUND:return '(';
+            case REC_R_ROUND:return ')';
+            case REC_L_SQUARE:return '[';
+            case REC_R_SQUARE:return ']';
+            case REC_TO:return '-';
+            case REC_EMPTY:return ' ';
+            case REC_ADD:return '+';
+            default:return c;
+        }
+    }
+
+
+    constexpr bool IsSingle(char c) { return SymbolSpeed(c) == 3; }
+
+    constexpr bool IsExecSymbol(char c) { return SymbolSpeed(c) != 0; }
+
+    constexpr bool IsTwoSideSymbol(char c) { return (SymbolSpeed(c) != 0 && !IsSingle(c)); }
+
+    constexpr bool IsRightBracket(char c) {
+        return c == REC_R_ROUND || c == REC_R_SQUARE;
+    }
+
+    constexpr bool IsLeftBracket(char c) {
+        return c == REC_L_ROUND || c == REC_L_SQUARE;
+    }
+
+    constexpr bool IsLatePreprocessSymbol(char c) {
+        return c == REC_TO;
+    }
+    constexpr bool IsHeadPreprocessSymbol(char c) {
+        return c == REC_R_SQUARE || c == REC_L_SQUARE;
+    }
+
+    template<ct_stringData cts, ct_stringData out = "", bool isEscape = false>
+    consteval auto ctPreprocess_Escape() {
+        if constexpr (cts.size == 1) {
+            return CompileTimeString<out>();
+        }
+        else if constexpr (isEscape) {
+            static_assert((out.Last() == '\\' || CharEscape(cts.First())!= cts.First()) && cts.First() != ' ',"invalid \\ character");
+            return ctPreprocess_Escape<cts.template SubStr<1, cts.size - 1>(),out.template SubStr<0, out.size - 1>().
+                    template Append(cts.First()),false>();
+        }
+        else {
+            return ctPreprocess_Escape<cts.template SubStr<1, cts.size - 1>(),
+                    out.template Append(CharEscape(cts.First())),cts.First() == '\\'>();
+        }
     }
 
     //preprocess input regex
-    template<ct_stringData cts, ct_stringData out = "">
-    consteval auto ctOpera() {
-        if constexpr (cts.size == 1)
+    template<ct_stringData cts, ct_stringData out = "",char insertChar = REC_AND>
+    consteval auto ctPreprocess_InsertOpera() {
+        if constexpr (cts.size == 1) {
+            static_assert(insertChar == REC_AND,"mismatched brackets [ ]");
             return CompileTimeString<out>();
-        else if constexpr (out.size == 1 || IsExecSymbol(cts.First()) || IsLatePreprocessSymbol(cts.First())) {
-            return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.Append(cts.First())>();
-        } else if constexpr (IsLatePreprocessSymbol(out.Last())) {
-            if constexpr (out.Last() == '-') {
-                if constexpr (out.Last(1) == cts.First())
-                    return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.template SubStr<0, out.size - 1>()>();
-                else
-                    return ctOpera<cts, out.template SubStr<0, out.size - 1>().Append('|').Append(
-                            out.Last(1) + 1).Append('-')>();
-            }
-            else {
-                static_assert(false,"What");
-            }
-        } else if constexpr (IsHeadPreprocessSymbol(cts.First())){
-            static_assert(false,"What");
         }
-        else if constexpr (!IsTwoSideSymbol(out.Last()) || out.Last() == ')') {
-            return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.Append('&').Append(cts.First())>();
+        else if constexpr (IsHeadPreprocessSymbol(cts.First())){
+
+                //change [] to ()
+                if constexpr (cts.First() == REC_L_SQUARE)
+                    return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>().Insert(REC_L_ROUND), out,REC_OR>();
+                else if constexpr (cts.First() == REC_R_SQUARE)
+                    return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>().Insert(REC_R_ROUND), out,REC_AND>();
+        }
+        // default symbol (without '(')
+        else if constexpr (out.size == 1 || IsExecSymbol(cts.First()) || IsLatePreprocessSymbol(cts.First())) {
+            return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>(), out.Append(cts.First()),insertChar>();
+        } else if constexpr (IsLatePreprocessSymbol(out.Last())) {
+
+            //'-'
+            if constexpr (out.Last() == REC_TO) {
+                //inside []
+                if constexpr (insertChar == REC_OR) {
+                    if constexpr (out.Last(1) == cts.First())
+                        return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>(), out.template SubStr<0,
+                                out.size - 1>(),insertChar>();
+                    else
+                        return ctPreprocess_InsertOpera<cts, out.template SubStr<0, out.size - 1>().Append(REC_OR).Append(
+                                out.Last(1) + 1).Append(REC_TO),insertChar>();
+                }
+                //outside []
+                else
+                    return ctPreprocess_InsertOpera<cts.Insert('-'), out.template SubStr<0,
+                            out.size - 1>(),insertChar>();
+            }
+
+        }
+        else if constexpr (!IsTwoSideSymbol(out.Last()) || IsRightBracket(out.Last())) {
+            return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>(), out.Append(insertChar).Append(cts.First()),insertChar>();
         } else
-            return ctOpera<cts.template SubStr<1, cts.size - 1>(), out.Append(cts.First())>();
+            return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>(), out.Append(cts.First()),insertChar>();
     }
 
+    template<ct_stringData cts, ct_stringData out = "",ct_stringData indexData = "">
+    consteval auto ctPreprocess_Parse() {
+        if constexpr (cts.size == 1) {
+            return CompileTimeString<out>();
+        }
+        else if constexpr (cts.First() == REC_ADD)
+        {
+            if constexpr (IsRightBracket(out.Last())) {
+                constexpr auto str = out.template SubStr<indexData.Last(),out.size - indexData.Last()>();
+                return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),
+                        out.Append(str).Append(REC_ANY),
+                        indexData.template SubStr<0, indexData.size - 1>()>();
+            }
+            else
+                return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(out.Last()).Append(REC_ANY),
+                        indexData>();
+        }
+        else if constexpr (IsLeftBracket(cts.First()))
+            return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(cts.First()),indexData.Append(out.size-1)>();
+        else if constexpr (out.size == 1)
+            return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(cts.First()),indexData>();
+        else
+        {
+            if constexpr (IsRightBracket(out.Last()))
+                return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(cts.First()),
+                        indexData.template SubStr<0, indexData.size - 1>()>();
+            else
+                return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(cts.First()),indexData>();
+
+        }
+    }
+    template<ct_stringData cts>
+    consteval auto ctPreprocess()
+    {
+        return  ctPreprocess_InsertOpera<decltype(ctPreprocess_Parse<decltype(ctPreprocess_Escape<cts>())::value>())::value>();
+    }
     //nfa node graph
     template<char check, size_t index, typename list = ct_list<>>
     struct NfaNode {
@@ -192,7 +454,7 @@ namespace pkuyo_detail {
         using AppendNode = NfaNodeGraph<NodeTypes..., T...>;
 
         template<char check>
-        using AppendNormalNode = NfaNodeGraph<NodeTypes..., NfaNode<check, size, ct_list<size + 1>>, NfaNode<'\0',
+        using AppendNormalNode = NfaNodeGraph<NodeTypes..., NfaNode<check, size, ct_list<size + 1>>, NfaNode<REC_EMPTY,
                 size + 1>>;
 
 
@@ -294,14 +556,14 @@ namespace pkuyo_detail {
         struct NfaExecute;
 
         template<typename Graph, typename Stack>
-        struct NfaExecute<'|', Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> != '\0'>> {
+        struct NfaExecute<REC_OR, Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> != REC_EMPTY>> {
             using Index2 = typename Stack::LastType;
             using Index1 = typename Stack::LastLastType;
 
-            using EmitNode1 = NfaNode<'\0', Graph::size, ct_list<Index1::_inIndex, Index2::_inIndex>>;
-            using EmitNode2 = NfaNode<'\0', Graph::size + 1>;
+            using EmitNode1 = NfaNode<REC_EMPTY, Graph::size, ct_list<Index1::_inIndex, Index2::_inIndex>>;
+            using EmitNode2 = NfaNode<REC_EMPTY, Graph::size + 1>;
 
-            using OutStack = typename Stack::template RemoveType<2>::template AppendType<NfaIndex<'\0', Graph::size>>;
+            using OutStack = typename Stack::template RemoveType<2>::template AppendType<NfaIndex<REC_EMPTY, Graph::size>>;
 
             using OutGraph = typename Graph::template ReplaceIndexGraph<Index1::_outIndex, Graph::size + 1>::
             template ReplaceIndexGraph<Index2::_outIndex, Graph::size + 1>::
@@ -309,7 +571,7 @@ namespace pkuyo_detail {
 
         };
         template<typename Graph, typename Stack>
-        struct NfaExecute<'|', Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> == '\0'>> {
+        struct NfaExecute<REC_OR, Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> == REC_EMPTY>> {
             using Index1 = typename Stack::LastLastType;
             using RootIndex = typename Stack::LastType;
 
@@ -321,16 +583,16 @@ namespace pkuyo_detail {
         };
 
         template<typename Graph, typename Stack>
-        struct NfaExecute<'?', Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> != '\0'>> {
+        struct NfaExecute<REC_MAY, Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> != REC_EMPTY>> {
             using Index = typename Stack::LastType;
 
-            using EmitNode = NfaNode<'\0', Graph::size, ct_list<Index::_outIndex, Index::_inIndex>>;
+            using EmitNode = NfaNode<REC_EMPTY, Graph::size, ct_list<Index::_outIndex, Index::_inIndex>>;
 
-            using OutStack = typename Stack::template RemoveType<1>::template AppendType<NfaIndex<'\0', Graph::size, Index::_outIndex>>;
+            using OutStack = typename Stack::template RemoveType<1>::template AppendType<NfaIndex<REC_EMPTY, Graph::size, Index::_outIndex>>;
             using OutGraph = typename Graph::template AppendNode<EmitNode>;
         };
         template<typename Graph, typename Stack>
-        struct NfaExecute<'?', Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> == '\0'>> {
+        struct NfaExecute<REC_MAY, Graph, Stack, std::enable_if_t<nfa_stack_last_check_v<Stack> == REC_EMPTY>> {
             using Index = typename Stack::LastType;
             using OutStack = Stack;
             using OutGraph = typename Graph::template ReplaceIndexGraph<Index::_inIndex, Index::_outIndex>;
@@ -338,7 +600,7 @@ namespace pkuyo_detail {
         };
 
         template<typename Graph, typename Stack>
-        struct NfaExecute<'&', Graph, Stack, void> {
+        struct NfaExecute<REC_AND, Graph, Stack, void> {
             using Index2 = typename Stack::LastType;
             using Index1 = typename Stack::LastLastType;
 
@@ -350,13 +612,13 @@ namespace pkuyo_detail {
         };
 
         template<typename Graph, typename Stack>
-        struct NfaExecute<'*', Graph, Stack, void> {
+        struct NfaExecute<REC_ANY, Graph, Stack, void> {
             using Index = typename Stack::LastType;
 
-            using EmitNode1 = NfaNode<'\0', Graph::size, ct_list<Index::_inIndex, Graph::size + 1>>;
-            using EmitNode2 = NfaNode<'\0', Graph::size + 1>;
+            using EmitNode1 = NfaNode<REC_EMPTY, Graph::size, ct_list<Index::_inIndex, Graph::size + 1>>;
+            using EmitNode2 = NfaNode<REC_EMPTY, Graph::size + 1>;
 
-            using OutStack = typename Stack::template RemoveType<1>::template AppendType<NfaIndex<'\0', Graph::size>>;
+            using OutStack = typename Stack::template RemoveType<1>::template AppendType<NfaIndex<REC_EMPTY, Graph::size>>;
 
             using OutGraph = typename Graph::template ReplaceIndexGraph<Index::_outIndex, Index::_inIndex>::
             template ReplaceIndexGraph<Index::_outIndex, Graph::size + 1>::
@@ -377,15 +639,15 @@ namespace pkuyo_detail {
             } else {
                 return NfaData<NfaGraph, NfaStack::LastType::_inIndex, NfaStack::LastType::_outIndex>();
             }
-        } else if constexpr (cts.First() == ')') {
+        } else if constexpr (cts.First() == REC_R_ROUND) {
 
-            if constexpr (symbol.Last() == '(') {
+            if constexpr (symbol.Last() == REC_L_ROUND) {
                 if constexpr (NfaStack::size == 1)
                     return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.template SubStr<0,
                             symbol.size - 1>(), NfaStack, NfaGraph>();
                 else
                     return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.template SubStr<0,
-                            symbol.size - 1>().Append('&'), NfaStack, NfaGraph>();
+                            symbol.size - 1>().Append(REC_AND), NfaStack, NfaGraph>();
             } else {
                 using Exec = nfaExecute::NfaExecute<symbol.Last(), NfaGraph, NfaStack>;
                 return connectNfa<cts, symbol.template SubStr<0,
@@ -471,7 +733,7 @@ namespace pkuyo_detail {
         return eClosure<check, ct_list<nowIndex>, graph>();
     }
 
-    template<size_t index, typename state, bool isEnd = false, typename toIndex = ct_list<>, typename toCheck = ct_list<>>
+    template<size_t index, typename state/*ct_list<...> nfa state*/, bool isEnd = false, typename toIndex = ct_list<>, typename toCheck = ct_list<>>
     struct DfaNode {
         template<size_t connectTo, char check>
         using ConnectTo = DfaNode<index, state, isEnd, typename toIndex::template AppendNoUnique<connectTo>, typename toCheck::template AppendNoUnique<check>>;
@@ -557,7 +819,7 @@ namespace pkuyo_detail {
     template<typename Nfa, typename Dfa, size_t currentState, typename list, size_t endState, size_t moveState>
     consteval auto buildDfa_moveState_impl() {
         using CurrentNode = typename Dfa::template Node<currentState>;
-        using NewState = decltype(eClosure<'\0',
+        using NewState = decltype(eClosure<REC_EMPTY,
                 decltype(move<list::template value<moveState>, typename CurrentNode::State, Nfa>()),
                 Nfa>());
         constexpr bool isEnd = NewState::template contains<endState>;
@@ -583,21 +845,24 @@ namespace pkuyo_detail {
     template<ct_stringData regex>
     struct RegexDefine {
         static constexpr auto rawRegex = regex;
-        static constexpr auto useRegex = decltype(pkuyo_detail::ctOpera<regex>())::value;
-
+        static constexpr auto useRegex = decltype(ctPreprocess<rawRegex>())::value;
         using NfaData = decltype(pkuyo_detail::connectNfa<useRegex>());
         using NfaGraph = typename NfaData::Graph;
 
         using StateList = decltype(pkuyo_detail::getAllState<useRegex>());
-        using InitState = decltype(pkuyo_detail::eClosure_single<'\0', NfaData::start, NfaGraph>());
+        using InitState = decltype(pkuyo_detail::eClosure_single<REC_EMPTY, NfaData::start, NfaGraph>());
         using DfaGraph = decltype(pkuyo_detail::buildDfa_impl<NfaGraph, DfaGraph<DfaNode<0, InitState>>, 0, StateList, NfaData::end>());
     };
 }
 
 
-template<ct_stringData regex>
+template<ct_stringData regex,bool minimize = false>
 consteval auto DefineRegex() {
-    return CreateExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph, regex>();
+    if constexpr (minimize)
+        return  CreateMinimizeExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph,
+        regex,typename pkuyo_detail::RegexDefine<regex>::StateList>();
+    else
+        return CreateExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph, regex,typename pkuyo_detail::RegexDefine<regex>::StateList>();
 }
 
 #endif //CLION_CT_REGEX_H

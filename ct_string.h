@@ -31,6 +31,18 @@ struct ct_stringData {
         value[N - 1] = '\0';
     }
 
+    template<size_t t>
+    constexpr ct_stringData(const ct_stringData<N - t> *s, const ct_stringData<t+1>& s2,std::index_sequence<t>) {
+        std::copy_n(s->value, N - t - 1, value);
+        std::copy_n(s2.value,t,value + N - t - 1);
+        value[N - 1] = '\0';
+    }
+    constexpr ct_stringData(const ct_stringData<N - 1> *s, char append, size_t index) {
+        for(size_t i = 0; i< N-1;i++)
+            value[i] = i > index ? s->value[i-1] : i == index ? append :s->value[i];
+
+    }
+
 public:
 
 
@@ -43,6 +55,13 @@ public:
         return ct_stringData<N + 1>(this, c);
     }
 
+    template<size_t t>
+    consteval auto Append(const ct_stringData<t>& c) const {
+        return ct_stringData<N + t - 1>(this, c, std::index_sequence<t-1>());
+    }
+    consteval ct_stringData<N + 1> Insert(char c,size_t index = 0) const {
+        return ct_stringData<N + 1>(this, c, index);
+    }
     consteval auto AppendUnique(char c) const {
         if constexpr (std::find(std::begin(value), std::end(value), c) != std::end(value))
             return ct_stringData<N>(this);
