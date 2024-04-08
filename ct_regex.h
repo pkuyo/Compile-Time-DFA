@@ -7,6 +7,7 @@
 
 #include <string_view>
 #include <type_traits>
+#include <cstdint>
 #include "ct_utils.h"
 #include "ct_list.h"
 #include "ct_string.h"
@@ -23,47 +24,43 @@ namespace pkuyo_detail
 class CompileTimeNode {
 
     __int64 index = -1;
-    __int64 pathConnects[256]{0};
-    char pathChecks[256]{0};
+    __int64 connects[256];
     bool isEnd = false;
-
-    size_t currentLength = 0;
-
+    size_t connectLength = 0;
 private:
 
     template<typename T/*DfaNode*/, size_t ...N>
     constexpr CompileTimeNode(T, __int64 index, bool isEnd, std::index_sequence<N...>) : index(index), isEnd(isEnd) {
-
+        std::fill(connects,connects+256,-1);
         (AddNewPath(T::ConnectionChecks::template value<N>, T::Connections::template value<N>), ...);
     }
 
     template<size_t length>
-    constexpr CompileTimeNode(const char (&stateChecks)[length],const size_t(&stateConnects)[length],__int64 index, bool isEnd)
+    constexpr CompileTimeNode(const char (&stateChecks)[length],const __int64(&stateConnects)[length],__int64 index, bool isEnd)
     : index(index), isEnd(isEnd) {
+        std::fill(connects,connects+256,-1);
         for(int i=0;i<length;i++){
             if(stateChecks[i] == '\0') break;
             AddNewPath(stateChecks[i],stateConnects[i]);
         }
     }
     constexpr void AddNewPath(char c, __int64 toIndex) {
-        pathConnects[currentLength] = toIndex;
-        pathChecks[currentLength++] = c;
+        connects[c] = toIndex;
+        connectLength++;
     }
 
-    constexpr CompileTimeNode() = default;
+
 
 public:
 
+    constexpr CompileTimeNode() = default;
 
     [[nodiscard]] constexpr bool IsEnd() const {
         return isEnd;
     }
 
     __int64 NextPath(char c) const {
-        for(int i=0;i<currentLength;i++)
-            if(pathChecks[i] == c)
-                return pathConnects[i];
-        return -1;
+        return connects[c];
     }
 
     template<typename rawStr, size_t length>
@@ -81,7 +78,7 @@ class CompileTimeDfa<CompileTimeString<cts>, length> {
     CompileTimeNode nodes[length]{};
 
 public:
-
+    size_t startIndex = 0;
     static constexpr auto rawString = cts;
     constexpr static size_t size = length;
 
@@ -91,15 +88,16 @@ private:
     struct MinimizeData
     {
         char stateChecks[length][moveSize]{0};
-        size_t stateConnects[length][moveSize]{0};
-
+        __int64 stateConnects[length][moveSize]{0};
+        int8_t stateFlags[length];
         size_t minimizeLength = 0;
-        constexpr MinimizeData(char (&inChecks)[length][moveSize], size_t(&inConnects)[length][moveSize],size_t newSize) : minimizeLength(newSize)
+        constexpr MinimizeData(char (&inChecks)[length][moveSize], __int64(&inConnects)[length][moveSize],  int8_t (&inFlags)[length],size_t newSize) : minimizeLength(newSize)
         {
             for(int i=0;i<size;i++) {
                 std::copy(inChecks[i],inChecks[i]+moveSize,stateChecks[i]);
                 std::copy(inConnects[i],inConnects[i]+moveSize,stateConnects[i]);
             }
+            std::copy(inFlags,inFlags+size,stateFlags);
         }
     };
 
@@ -117,26 +115,152 @@ private:
     }
 
     template<size_t size,size_t charLength>
-    consteval CompileTimeDfa(const char (&stateChecks)[size][charLength],const size_t(&stateConnects)[size][charLength]) {
-        for(int i=0;i<length;i++)
-            nodes[i] = CompileTimeNode(stateChecks[i],stateConnects[i],i, i == 0);
-    }
-
-    consteval static void Dfs_findUnreachable(const CompileTimeDfa & dfa, bool reachable[],int currentNode = 0)
-    {
-        reachable[currentNode] = true;
-        for(int i=0;i<dfa.nodes[currentNode].currentLength;i++){
-            if(!reachable[dfa.nodes[currentNode].pathConnects[i]])
-                Dfs_findUnreachable(dfa,reachable, dfa.nodes[currentNode].pathConnects[i]);
+    consteval CompileTimeDfa(const char (&stateChecks)[size][charLength],const __int64(&stateConnects)[size][charLength], const int8_t (&stateFlags)[size]) {
+        for(int i=0;i<length;i++) {
+            nodes[i] = CompileTimeNode(stateChecks[i], stateConnects[i], i, stateFlags[i] & 1);
+            if(stateFlags[i] & 2)
+                startIndex = i;
         }
     }
+    template<typename MoveList>
+    consteval static uint8_t Dfs_findUnreachable(const CompileTimeDfa & dfa,__int64 reachable[],int currentNode = 0)
+    {
+        uint8_t result = 0;
+        reachable[currentNode] = 0;
+        for(int i=0;i<MoveList::size;i++){
+            if(dfa.nodes[currentNode].connects[MoveList::data[i]] == -1) continue;
+            if(reachable[dfa.nodes[currentNode].connects[MoveList::data[i]]] == -2)
+                result =std::max(result,Dfs_findUnreachable<MoveList>(dfa,reachable,
+                                                                      dfa.nodes[currentNode].connects[MoveList::data[i]]));
+        }
+        if(dfa.nodes[currentNode].IsEnd()) {
+            result = 1;
+            reachable[currentNode] = 1;
+            return result;
+        }
+        //reachable[currentNode] += result;
+        return result;
+    }
+
+    template<typename MoveList,size_t size>
+    consteval static auto Minimize_impl(const CompileTimeDfa & dfa)
+    {
+        //old state node map to new state
+        __int64 statesMap[size]{0};
+
+        __int64 statesReverseMap[size][size]{0};
+        __int64 newStatesLength = 2;
+
+        // 1 -> End 2-> Start
+        int8_t statesFlag[size]{0};
+
+        //old state node in new state length
+        __int64 statesLength[size]{0};
 
 
+
+        std::fill(statesMap,statesMap+size,-2);
+
+        //if newStates[i]<0 it's a reachable node
+        Dfs_findUnreachable<MoveList>(dfa,statesMap,0);
+
+        //init new state group : end / not-end state group
+        for(size_t i = 0; i < size; i++) {
+            if(statesMap[i] >= 0){
+                statesReverseMap[statesMap[i]][ statesLength[statesMap[i]]++ ] = i;
+            }
+        }
+
+
+        for(size_t i = 0; i < MoveList::size;i++){
+            char c = MoveList::data[i];
+            auto lastNewLength = newStatesLength;
+
+            for(size_t j = 0;j < lastNewLength;j++){
+
+                //group state move to ...
+                __int64 tmpMoveTo[size]{0};
+                size_t tmpMoveToLength = 0;
+
+
+                auto lastState = statesLength[j];
+                auto LastLength =  newStatesLength - 1;
+                //separate single group
+                for(size_t k = 0; k < statesLength[j];k ++){
+                    auto nodeIndex = statesReverseMap[j][k];
+
+
+                    __int64 moveTo = -1;
+                    if(dfa.nodes[nodeIndex].connects[c] != -1)
+                        moveTo = statesMap[dfa.nodes[nodeIndex].connects[c]];
+
+                    size_t moveIndex = 0;
+                    for(moveIndex = 0; moveIndex< tmpMoveToLength;moveIndex++)
+                        if(tmpMoveTo[moveIndex] == moveTo)
+                            break;
+
+                    if(moveIndex == tmpMoveToLength){
+                        tmpMoveTo[tmpMoveToLength++] = moveTo;
+                        if(moveIndex != 0)
+                            newStatesLength++;
+                    }
+                    //separate state
+                    if(moveIndex != 0){
+                        auto newStateIndex = LastLength+moveIndex;
+                        statesMap[nodeIndex] = newStateIndex;
+                        statesReverseMap[newStateIndex][statesLength[newStateIndex]++] = nodeIndex;
+                        statesReverseMap[j][k] = -1;
+                        statesLength[j]--;
+                    }
+                }
+
+                //clean empty slot
+                size_t insertPos[size]{0};
+                size_t insertEnd = 0;
+                size_t insertStart = 0;
+                for(size_t k = 0; k< lastState;k++){
+                    if(statesReverseMap[j][k]== -1){
+                        insertPos[insertEnd++] = k;
+                    }
+                    else if(insertStart!=insertEnd) {
+                        statesReverseMap[j][insertPos[insertStart++]] = statesReverseMap[j][k];
+                    }
+                }
+
+            }
+        }
+        //new state node connect to
+        __int64 statesConnect[size][MoveList::size]{0};
+        //new state node connect check char
+        char statesCheck[size][MoveList::size]{0};
+
+        __int64 statesConnectLength[size]{0};
+
+        for(size_t i = 0;i< newStatesLength;i++){
+            for(size_t j = 0; j< MoveList::size;j++){
+                auto c = MoveList::data[j];
+                if(dfa.nodes[statesReverseMap[i][0]].connects[c] == -1|| statesMap[dfa.nodes[statesReverseMap[i][0]].connects[c]] < 0) continue;
+                statesConnect[i][statesConnectLength[i]] = statesMap[ dfa.nodes[statesReverseMap[i][0]].connects[c] ];
+                statesCheck[i][statesConnectLength[i]++] = c;
+            }
+
+            for(int j = 0;j< statesLength[i];j++){
+                if(dfa.nodes[statesReverseMap[i][j]].IsEnd())
+                    statesFlag[i] |= 1;
+                if (statesReverseMap[i][j] == 0)
+                    statesFlag[i] |= 2;
+            }
+
+
+        }
+
+        return MinimizeData<MoveList::size>(statesCheck, statesConnect,statesFlag, newStatesLength);
+    }
 
 public:
 
     [[nodiscard]] constexpr bool CheckString(std::string_view view) const {
-        __int64 node = 0;
+        __int64 node = startIndex;
         __int64 index = 0;
         while (index != view.size()) {
             node = nodes[node].NextPath(view[index++]);
@@ -147,7 +271,7 @@ public:
     }
 
 
-    template<typename Dfa, ct_stringData c,typename ctDfa>
+    template<typename Dfa, ct_stringData c,typename MoveList>
     friend consteval auto pkuyo_detail::CreateExecuteDfa();
 
     template<typename Dfa, ct_stringData c,typename MoveList>
@@ -175,15 +299,6 @@ namespace pkuyo_detail {
         REC_ADD = 11,       // '+'
     };
 
-    constexpr int SymbolSpeed(char c) {
-        if (c == REC_OR || c == REC_AND)
-            return 2;
-        if (c == REC_ANY || c == REC_MAY || c == REC_ADD)
-            return 3;
-        if (c == REC_L_ROUND || c == REC_R_ROUND)
-            return 1;
-        return 0;
-    }
 
     constexpr char CharEscape(char c)
     {
@@ -203,6 +318,17 @@ namespace pkuyo_detail {
             default:return c;
         }
     }
+
+    constexpr int SymbolSpeed(char c) {
+        if (c == REC_OR || c == REC_AND)
+            return 2;
+        if (c == REC_ANY || c == REC_MAY || c == REC_ADD)
+            return 3;
+        if (c == REC_L_ROUND || c == REC_R_ROUND)
+            return 1;
+        return 0;
+    }
+
     constexpr char CharEscapeBack(char c)
     {
         switch(c)
@@ -584,8 +710,6 @@ namespace pkuyo_detail {
         static_assert(!std::is_same_v<NfaStack,std::nullptr_t>,"Invalid Regex expression");
         if constexpr (cts.size == 1) {
             if constexpr (symbol.size != 1) {
-
-                static_assert(NfaStack::size >= IsSingle(symbol.Last()) ? 1: 2,"Invalid Regex expression");
                 using Exec = nfaExecute::NfaExecute<symbol.Last(), NfaGraph, NfaStack>;
                 return connectNfa<cts, symbol.template SubStr<0,
                         symbol.size - 1>(), typename Exec::OutStack, typename Exec::OutGraph>();
@@ -611,7 +735,7 @@ namespace pkuyo_detail {
         } else if constexpr (IsExecSymbol(cts.First())) {
 
             if constexpr (IsSingle(cts.First())) {
-                static_assert(NfaStack::size >= IsSingle(symbol.Last()) ? 1: 2,"Invalid Regex expression");
+
                 using Exec = nfaExecute::NfaExecute<cts.First(), NfaGraph, NfaStack>;
                 return connectNfa<cts.template SubStr<1,
                         cts.size - 1>(), symbol, typename Exec::OutStack, typename Exec::OutGraph>();
@@ -622,7 +746,7 @@ namespace pkuyo_detail {
                 return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.Append(
                         cts.First()), NfaStack, NfaGraph>();
             } else {
-                static_assert(NfaStack::size >= IsSingle(symbol.Last()) ? 1: 2,"Invalid Regex expression");
+
 
                 using Exec = nfaExecute::NfaExecute<symbol.Last(), NfaGraph, NfaStack>;
                 return connectNfa<cts, symbol.template SubStr<0,
@@ -651,7 +775,7 @@ namespace pkuyo_detail {
     using MoveStep = std::conditional_t<check == graph::template FindType<nowIndex>::_check,
             typename graph::template FindType<nowIndex>::ConnectList, ct_list<>>;
 
-    template<char check, typename list, typename graph /*NfaNodeGraph*/, size_t N = list::size>
+    template<char check, typename list, typename graph /*NfaNodeGraph*/, size_t N = list::size-1>
     consteval auto move() {
         constexpr size_t nowIndex = list::template value<N>;
         if constexpr (N == 0) {
@@ -760,12 +884,16 @@ namespace pkuyo_detail {
 
         template<char checkChar, bool end, typename stateList /*ct_list<>*/, size_t currentIndex>
         auto operator|(DfaNewState<checkChar, end, stateList, currentIndex>) {
-            using NewState = stateList;
-            using CurrentNode = Node<currentIndex>;
-            if constexpr (contains<NewState>)
-                return ConnectNode<CurrentNode, Find<NewState>::_index, checkChar>();
-            else
-                return typename Append<DfaNode<size, NewState, end>>::template ConnectNode<CurrentNode, size, checkChar>();
+            if constexpr (std::is_same_v<stateList,ct_list<>>)
+                return DfaGraph();
+            else {
+                using NewState = stateList;
+                using CurrentNode = Node<currentIndex>;
+                if constexpr (contains<NewState>)
+                    return ConnectNode<CurrentNode, Find<NewState>::_index, checkChar>();
+                else
+                    return typename Append<DfaNode<size, NewState, end>>::template ConnectNode<CurrentNode, size, checkChar>();
+            }
         }
     };
 
@@ -801,6 +929,12 @@ namespace pkuyo_detail {
         return CompileTimeDfa<CompileTimeString<cts>, Dfa::size>(std::make_index_sequence<Dfa::size>(), Dfa());
     }
 
+    template<typename Dfa, ct_stringData cts,typename MoveList>
+    consteval auto CreateMinimizeExecuteDfa() {
+        constexpr auto dfa = CompileTimeDfa<CompileTimeString<cts>, Dfa::size>(std::make_index_sequence<Dfa::size>(), Dfa());
+        constexpr auto minimizeData = decltype(dfa)::template Minimize_impl<MoveList,Dfa::size>(dfa);
+        return CompileTimeDfa<CompileTimeString<cts>,minimizeData.minimizeLength>(minimizeData.stateChecks,minimizeData.stateConnects,minimizeData.stateFlags);
+    }
 
     template<ct_stringData regex>
     struct RegexDefine {
@@ -819,13 +953,13 @@ namespace pkuyo_detail {
 //define and create a regex at compile time
 template<ct_stringData regex,bool minimize = false>
 consteval auto DefineRegex() {
-    //TODO:Rewrite the minimization algorithm
-    //if constexpr (minimize)
-    //   return  pkuyo_detail::CreateMinimizeExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph,
-    //   regex,typename pkuyo_detail::RegexDefine<regex>::StateList>();
-    static_assert(!minimize,"Rewrite the minimization algorithm");
-    //else
-    return pkuyo_detail::CreateExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph, regex,typename pkuyo_detail::RegexDefine<regex>::StateList>();
+    if constexpr (minimize)
+        return pkuyo_detail::CreateMinimizeExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph,
+                regex, typename pkuyo_detail::RegexDefine<regex>::StateList>();
+    else
+        return pkuyo_detail::CreateExecuteDfa<typename pkuyo_detail::RegexDefine<regex>::DfaGraph, regex,
+        typename pkuyo_detail::RegexDefine<regex>::StateList>();
 }
+
 
 #endif //COMPILETIMEDFA_CT_REGEX_H

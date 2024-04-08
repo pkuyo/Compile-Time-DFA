@@ -13,12 +13,16 @@
 
 int main() {
 
-    auto regex = DefineRegex<"\\([0-9]*(.[0-9]+)?\\)",false/*false for not minimize*/>();
+    auto regex = DefineRegex<"\\([0-9]*(.[0-9]+)?\\)",true/*false for not minimize*/>();
+    auto regex2 = DefineRegex<"\\([0-9]*(.[0-9]+)?\\)",false/*false for not minimize*/>();
 
     std::cout << std::boolalpha << std::endl;
-    std::cout << regex.CheckString("(2)")<< std::endl;
-    std::cout << regex.CheckString("(2.3)")<< std::endl;
-    std::cout << regex.CheckString("(2.)")<< std::endl;
+    std::cout << regex.CheckString("(13)")<< std::endl;
+    std::cout << regex.CheckString("(13.)")<< std::endl;
+    std::cout << regex.CheckString("(13.2)")<< std::endl;
+    std::cout << regex.CheckString("(.23)")<< std::endl;
+    std::cout << regex2.CheckString("(03)")<< std::endl;
+    std::cout << regex.CheckString("(192)")<< std::endl;
 
     std::string str;
     while(str != "exit") {
