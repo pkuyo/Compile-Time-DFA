@@ -13,21 +13,18 @@
 
 int main() {
 
-    auto regex = DefineRegex<"\\([0-9]*(.[0-9]+)?\\)",true/*false for not minimize*/>();
-    auto regex2 = DefineRegex<"\\([0-9]*(.[0-9]+)?\\)",false/*false for not minimize*/>();
+    constexpr auto variable = DefineRegex<"[a-z_][a-z0-9_]*",true/*false for not minimize*/>();
+    constexpr auto number = DefineRegex<"[0-9]+(.[0-9]+f?)?",true/*false for not minimize*/>();
 
     std::cout << std::boolalpha << std::endl;
-    std::cout << regex.CheckString("(13)")<< std::endl;
-    std::cout << regex.CheckString("(13.)")<< std::endl;
-    std::cout << regex.CheckString("(13.2)")<< std::endl;
-    std::cout << regex.CheckString("(.23)")<< std::endl;
-    std::cout << regex2.CheckString("(03)")<< std::endl;
-    std::cout << regex.CheckString("(192)")<< std::endl;
-
+    std::cout << number.CheckString("1.23f") << std::endl;
+    std::cout << number.CheckString("72") << std::endl;
+    std::cout << number.CheckString("3.1415926") << std::endl;
+    std::cout << number.CheckString("23.") << std::endl;
     std::string str;
     while(str != "exit") {
         std::cin >> str;
-        std::cout << regex.CheckString(str) << std::endl;
+        std::cout << variable.CheckString(str) << std::endl;
     }
     return 0;
 }

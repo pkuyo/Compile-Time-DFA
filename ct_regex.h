@@ -21,31 +21,37 @@ namespace pkuyo_detail
     consteval auto CreateMinimizeExecuteDfa();
 }
 
+template<size_t letterLength>
 class CompileTimeNode {
 
     __int64 index = -1;
-    __int64 connects[256];
+    __int64 connects[letterLength]{0};
     bool isEnd = false;
     size_t connectLength = 0;
 private:
 
     template<typename T/*DfaNode*/, size_t ...N>
-    constexpr CompileTimeNode(T, __int64 index, bool isEnd, std::index_sequence<N...>) : index(index), isEnd(isEnd) {
-        std::fill(connects,connects+256,-1);
-        (AddNewPath(T::ConnectionChecks::template value<N>, T::Connections::template value<N>), ...);
+    constexpr CompileTimeNode(T, __int64 index, bool isEnd, std::index_sequence<N...>,const uint8_t (&letterMap)[256]) : index(index), isEnd(isEnd) {
+        std::fill(connects,connects+letterLength,-1);
+        (AddNewPath(T::ConnectionChecks::template value<N>, T::Connections::template value<N>,letterMap), ...);
     }
 
     template<size_t length>
-    constexpr CompileTimeNode(const char (&stateChecks)[length],const __int64(&stateConnects)[length],__int64 index, bool isEnd)
+    constexpr CompileTimeNode(const uint8_t (&stateChecks)[length],const __int64(&stateConnects)[length],__int64 index, bool isEnd)
     : index(index), isEnd(isEnd) {
-        std::fill(connects,connects+256,-1);
+        std::fill(connects,connects+letterLength,-1);
         for(int i=0;i<length;i++){
-            if(stateChecks[i] == '\0') break;
+            if(stateChecks[i] == 255) break;
             AddNewPath(stateChecks[i],stateConnects[i]);
         }
     }
-    constexpr void AddNewPath(char c, __int64 toIndex) {
+    constexpr void AddNewPath(uint8_t c, __int64 toIndex) {
         connects[c] = toIndex;
+        connectLength++;
+    }
+
+    constexpr void AddNewPath(char c, __int64 toIndex,const uint8_t (&letterMap)[256]) {
+        connects[letterMap[c]] = toIndex;
         connectLength++;
     }
 
@@ -63,39 +69,41 @@ public:
         return connects[c];
     }
 
-    template<typename rawStr, size_t length>
+    template<typename rawStr, size_t length,size_t _letterLength>
     friend class CompileTimeDfa;
 
 };
 
-template<typename rawStr, size_t length>
+template<typename rawStr, size_t length,size_t letterLength>
 class CompileTimeDfa;
 
 
-template<ct_stringData cts, size_t length>
-class CompileTimeDfa<CompileTimeString<cts>, length> {
+template<ct_stringData cts, size_t length,size_t letterLength>
+class CompileTimeDfa<CompileTimeString<cts>, length,letterLength> {
 
-    CompileTimeNode nodes[length]{};
+    CompileTimeNode<letterLength> nodes[length]{};
 
 public:
     size_t startIndex = 0;
     static constexpr auto rawString = cts;
     constexpr static size_t size = length;
 
+    uint8_t letterMap[256]{0};
+
 private:
 
-    template<size_t moveSize>
+
     struct MinimizeData
     {
-        char stateChecks[length][moveSize]{0};
-        __int64 stateConnects[length][moveSize]{0};
+        uint8_t stateChecks[length][letterLength]{0};
+        __int64 stateConnects[length][letterLength]{0};
         int8_t stateFlags[length];
         size_t minimizeLength = 0;
-        constexpr MinimizeData(char (&inChecks)[length][moveSize], __int64(&inConnects)[length][moveSize],  int8_t (&inFlags)[length],size_t newSize) : minimizeLength(newSize)
+        constexpr MinimizeData(uint8_t (&inChecks)[length][letterLength], __int64(&inConnects)[length][letterLength],  int8_t (&inFlags)[length],size_t newSize) : minimizeLength(newSize)
         {
             for(int i=0;i<size;i++) {
-                std::copy(inChecks[i],inChecks[i]+moveSize,stateChecks[i]);
-                std::copy(inConnects[i],inConnects[i]+moveSize,stateConnects[i]);
+                std::copy(inChecks[i],inChecks[i]+letterLength,stateChecks[i]);
+                std::copy(inConnects[i],inConnects[i]+letterLength,stateConnects[i]);
             }
             std::copy(inFlags,inFlags+size,stateFlags);
         }
@@ -104,34 +112,40 @@ private:
     template<typename Graph, size_t N>
     consteval void CreateExecuteDfa_single_impl(CompileTimeDfa *exec) {
         using Node = typename Graph::template Node<N>;
-        auto execNode = CompileTimeNode(Node(), Node::_index, Node::_isEnd,
-                                        std::make_index_sequence<Node::Connections::size>());
+        auto execNode = CompileTimeNode<letterLength>(Node(), Node::_index, Node::_isEnd,
+                                        std::make_index_sequence<Node::Connections::size>(),exec->letterMap);
         exec->nodes[Node::_index] = execNode;
     }
 
-    template<typename Graph, size_t ...N>
-    consteval CompileTimeDfa(std::index_sequence<N...>, Graph) {
+    template<typename StateList/*ct_list<>*/,typename Graph, size_t ...N>
+    consteval CompileTimeDfa(StateList,std::index_sequence<N...>, Graph) {
+        for(size_t i =0;i < StateList::size;i++)
+            letterMap[StateList::data[i]] = i;
         (CreateExecuteDfa_single_impl<Graph, N>(this), ...);
+
     }
 
-    template<size_t size,size_t charLength>
-    consteval CompileTimeDfa(const char (&stateChecks)[size][charLength],const __int64(&stateConnects)[size][charLength], const int8_t (&stateFlags)[size]) {
+    template<typename StateList/*ct_list<>*/,size_t size,size_t charLength>
+    consteval CompileTimeDfa(StateList,const uint8_t (&stateChecks)[size][charLength],const __int64(&stateConnects)[size][charLength], const int8_t (&stateFlags)[size]) {
+        for(size_t i =0;i < StateList::size;i++)
+            letterMap[StateList::data[i]] = i;
+
         for(int i=0;i<length;i++) {
-            nodes[i] = CompileTimeNode(stateChecks[i], stateConnects[i], i, stateFlags[i] & 1);
+            nodes[i] = CompileTimeNode<letterLength>(stateChecks[i], stateConnects[i], i, stateFlags[i] & 1);
             if(stateFlags[i] & 2)
                 startIndex = i;
         }
+
     }
-    template<typename MoveList>
+
     consteval static uint8_t Dfs_findUnreachable(const CompileTimeDfa & dfa,__int64 reachable[],int currentNode = 0)
     {
         uint8_t result = 0;
         reachable[currentNode] = 0;
-        for(int i=0;i<MoveList::size;i++){
-            if(dfa.nodes[currentNode].connects[MoveList::data[i]] == -1) continue;
-            if(reachable[dfa.nodes[currentNode].connects[MoveList::data[i]]] == -2)
-                result =std::max(result,Dfs_findUnreachable<MoveList>(dfa,reachable,
-                                                                      dfa.nodes[currentNode].connects[MoveList::data[i]]));
+        for(int i=0;i<letterLength;i++){
+            if(dfa.nodes[currentNode].connects[i] == -1) continue;
+            if(reachable[dfa.nodes[currentNode].connects[i]] == -2)
+                result =std::max(result,Dfs_findUnreachable(dfa,reachable,dfa.nodes[currentNode].connects[i]));
         }
         if(dfa.nodes[currentNode].IsEnd()) {
             result = 1;
@@ -158,11 +172,10 @@ private:
         __int64 statesLength[size]{0};
 
 
-
         std::fill(statesMap,statesMap+size,-2);
 
         //if newStates[i]<0 it's a reachable node
-        Dfs_findUnreachable<MoveList>(dfa,statesMap,0);
+        Dfs_findUnreachable(dfa,statesMap,0);
 
         //init new state group : end / not-end state group
         for(size_t i = 0; i < size; i++) {
@@ -173,7 +186,7 @@ private:
 
 
         for(size_t i = 0; i < MoveList::size;i++){
-            char c = MoveList::data[i];
+            auto c = i;
             auto lastNewLength = newStatesLength;
 
             for(size_t j = 0;j < lastNewLength;j++){
@@ -232,18 +245,19 @@ private:
         //new state node connect to
         __int64 statesConnect[size][MoveList::size]{0};
         //new state node connect check char
-        char statesCheck[size][MoveList::size]{0};
+        uint8_t statesCheck[size][MoveList::size]{0};
 
         __int64 statesConnectLength[size]{0};
 
         for(size_t i = 0;i< newStatesLength;i++){
             for(size_t j = 0; j< MoveList::size;j++){
-                auto c = MoveList::data[j];
+                auto c = j;
                 if(dfa.nodes[statesReverseMap[i][0]].connects[c] == -1|| statesMap[dfa.nodes[statesReverseMap[i][0]].connects[c]] < 0) continue;
                 statesConnect[i][statesConnectLength[i]] = statesMap[ dfa.nodes[statesReverseMap[i][0]].connects[c] ];
                 statesCheck[i][statesConnectLength[i]++] = c;
             }
-
+            if(statesConnectLength[i] != MoveList::size)
+                statesCheck[i][statesConnectLength[i]] = 255; //set end
             for(int j = 0;j< statesLength[i];j++){
                 if(dfa.nodes[statesReverseMap[i][j]].IsEnd())
                     statesFlag[i] |= 1;
@@ -254,7 +268,7 @@ private:
 
         }
 
-        return MinimizeData<MoveList::size>(statesCheck, statesConnect,statesFlag, newStatesLength);
+        return MinimizeData(statesCheck, statesConnect,statesFlag, newStatesLength);
     }
 
 public:
@@ -263,7 +277,7 @@ public:
         __int64 node = startIndex;
         __int64 index = 0;
         while (index != view.size()) {
-            node = nodes[node].NextPath(view[index++]);
+            node = nodes[node].NextPath(letterMap[view[index++]]);
             if (node == -1)
                 return false;
         }
@@ -380,11 +394,11 @@ namespace pkuyo_detail {
         else if constexpr (isEscape) {
             static_assert((cts.First() == '\\' || CharEscape(cts.First())!= cts.First()) && cts.First() != ' ',"invalid \\ character");
             return ctPreprocess_Escape<cts.template SubStr<1, cts.size - 1>(),
-                    out.template SubStr<0, out.size - 1>().template Append(cts.First()),false,bracketCount>();
+                    out.template SubStr<0, out.size - 1>().Append(cts.First()),false,bracketCount>();
         }
         else {
             return ctPreprocess_Escape<cts.template SubStr<1, cts.size - 1>(),
-                    out.template Append(CharEscape(cts.First())),
+                    out.Append(CharEscape(cts.First())),
                             cts.First() == '\\',
                             (bracketCount + (IsRightBracket(CharEscape(cts.First())) ? -1 :
                              (IsLeftBracket(CharEscape(cts.First())) ? 1 : 0)))>();
@@ -926,14 +940,16 @@ namespace pkuyo_detail {
 
     template<typename Dfa, ct_stringData cts,typename MoveList>
     consteval auto CreateExecuteDfa() {
-        return CompileTimeDfa<CompileTimeString<cts>, Dfa::size>(std::make_index_sequence<Dfa::size>(), Dfa());
+        return CompileTimeDfa<CompileTimeString<cts>, Dfa::size,MoveList::size>(MoveList(),std::make_index_sequence<Dfa::size>(), Dfa());
     }
 
     template<typename Dfa, ct_stringData cts,typename MoveList>
     consteval auto CreateMinimizeExecuteDfa() {
-        constexpr auto dfa = CompileTimeDfa<CompileTimeString<cts>, Dfa::size>(std::make_index_sequence<Dfa::size>(), Dfa());
+        constexpr auto dfa = CompileTimeDfa<CompileTimeString<cts>, Dfa::size,MoveList::size>
+                (MoveList(),std::make_index_sequence<Dfa::size>(), Dfa());
         constexpr auto minimizeData = decltype(dfa)::template Minimize_impl<MoveList,Dfa::size>(dfa);
-        return CompileTimeDfa<CompileTimeString<cts>,minimizeData.minimizeLength>(minimizeData.stateChecks,minimizeData.stateConnects,minimizeData.stateFlags);
+        return CompileTimeDfa<CompileTimeString<cts>,minimizeData.minimizeLength,MoveList::size>
+                (MoveList(),minimizeData.stateChecks,minimizeData.stateConnects,minimizeData.stateFlags);
     }
 
     template<ct_stringData regex>
