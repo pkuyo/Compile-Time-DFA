@@ -5,7 +5,7 @@
 #ifndef COMPILETIMEDFA_CT_UTILS_H
 #define COMPILETIMEDFA_CT_UTILS_H
 
-namespace pkuyo_detail{
+namespace pkuyo::pkuyo_detail{
 
     struct ct_empty{};
 

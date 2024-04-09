@@ -12,18 +12,17 @@
 
 int main() {
 
-    constexpr auto variable = DefineRegex<"[a-z_][a-z0-9_]*",true/*false for not minimize*/>();
-    constexpr auto number = DefineRegex<"[0-9]+(.[0-9]+f?)?",true/*false for not minimize*/>();
-
+    constexpr auto variable = pkuyo::DefineRegex<"[a-z_][a-z0-9_]*",true/*false for not minimize*/>();
+    constexpr auto number = pkuyo::DefineRegex<"[0-9]+(.[0-9]+f?)?",true/*false for not minimize*/>();
     std::cout << std::boolalpha << std::endl;
-    std::cout << number.CheckString("1.23f") << std::endl;
-    std::cout << number.CheckString("72") << std::endl;
-    std::cout << number.CheckString("3.1415926") << std::endl;
-    std::cout << number.CheckString("23.") << std::endl;
+    std::cout << number.Match("1.23f") << std::endl;
+    std::cout << number.Match("72") << std::endl;
+    std::cout << number.Match("3.1415926") << std::endl;
+    std::cout << number.Match("23.") << std::endl;
     std::string str;
     while(str != "exit") {
         std::cin >> str;
-        std::cout << variable.CheckString(str) << std::endl;
+        std::cout << variable.Match(str) << std::endl;
     }
     return 0;
 }

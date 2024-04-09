@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <tuple>
 
-namespace pkuyo_detail {
+namespace  pkuyo::pkuyo_detail {
     template<size_t N>
     struct ct_listData {
 
@@ -79,25 +79,16 @@ namespace pkuyo_detail {
         return ct_listData<sizeof...(M)>(std::index_sequence<M...>());
     }
 }
-template<size_t... N> requires ((N < 10000000) &&...) || (sizeof...(N) == 0)
-struct ct_list;
 
-template<size_t item, size_t M, typename Tuple>
-constexpr bool contains_item_impl(Tuple &&tuple) {
-    return std::get<M>(tuple) == item;
+
+namespace pkuyo{
+    template<size_t... N> requires ((N < 10000000) &&...) || (sizeof...(N) == 0)
+    struct ct_list;
 }
 
-template<typename list, size_t item, size_t... N>
-constexpr bool contains_item(std::index_sequence<N...> &&) {
-    return (contains_item_impl<item, N>(list::tuple)|| ...);
-};
 
 
-template<typename list1, typename list2>
-constexpr bool is_value_equal_v =
-        list1::size == list2::size && std::equal(list1::data.sortData, list1::data.sortData + list1::size, list2::data.sortData);
-
-namespace pkuyo_detail
+namespace  pkuyo::pkuyo_detail
 {
     template<size_t expectLength,size_t length1,size_t length2>
     consteval auto merge_list_new_impl(pkuyo_detail::ct_listData<length1> list1, pkuyo_detail::ct_listData<length2> list2)
@@ -155,103 +146,105 @@ namespace pkuyo_detail
         return merge_list_new_ret<merge_list_new_impl<size>(list1,list2)>(std::make_index_sequence<size>());
     }
 }
+namespace pkuyo {
+    template<typename list1, typename list2>
+    constexpr bool is_value_equal_v =
+            list1::size == list2::size &&
+            std::equal(list1::data.sortData, list1::data.sortData + list1::size, list2::data.sortData);
+
+    template<typename ...lists>
+    struct merge_list;
+    template<typename list>
+    struct merge_list<list> {
+        using Type = list;
+    };
+
+    template<typename list1>
+    struct merge_list<list1, ct_list<>> {
+        using Type = list1;
+    };
+
+    template<typename list1, typename list2>
+    struct merge_list<list1, list2> {
+        using Type = decltype(pkuyo_detail::merge_list_new<list1, list2>());
+    };
+
+    template<typename list1, typename list2, typename ...list>
+    struct merge_list<list1, list2, list...> {
+        using Type = typename merge_list<typename merge_list<list1, list2>::Type, typename merge_list<list...>::Type>::Type;
+    };
 
 
-template<typename ...lists>
-struct merge_list;
-template<typename list>
-struct merge_list<list> {
-    using Type = list;
-};
+    template<typename ...list>
+    using merge_list_t = typename merge_list<list...>::Type;
 
-template<typename list1>
-struct merge_list<list1, ct_list<>> {
-    using Type = list1;
-};
+    template<typename list, size_t count, typename = void>
+    struct list_remove;
 
-template<typename list1, typename list2>
-struct merge_list<list1, list2> {
-    using Type = decltype(pkuyo_detail::merge_list_new<list1,list2>());
-};
+    template<typename list, size_t count>
+    struct list_remove<list, count, std::enable_if_t<list::size >= count>> {
+        using Type = decltype(list::_remove(std::make_index_sequence<list::size - count>()));
+    };
 
-template<typename list1, typename list2, typename ...list>
-struct merge_list<list1, list2, list...> {
-    using Type = typename merge_list<typename merge_list<list1, list2>::Type, typename merge_list<list...>::Type>::Type;
-};
+    template<typename list, size_t count>
+    struct list_remove<list, count, std::enable_if_t<list::size <= count - 1>> {
+        using Type = ct_list<>;
+    };
 
+    template<size_t... N> requires ((N < 10000000) &&...) || (sizeof...(N) == 0)
 
-template<typename ...list>
-using merge_list_t = typename merge_list<list...>::Type;
+    struct ct_list {
+    public:
+        static constexpr pkuyo_detail::ct_listData<sizeof...(N)> data{pkuyo_detail::newList<N...>()};
+        static constexpr size_t size = sizeof...(N);
 
-template<typename list, size_t count, typename = void>
-struct list_remove;
+        static constexpr size_t last = data.data[size > 0 ? size - 1 : 0];
 
-template<typename list, size_t count>
-struct list_remove<list, count, std::enable_if_t<list::size >= count>> {
-    using Type = decltype(list::_remove(std::make_index_sequence<list::size - count>()));
-};
-
-template<typename list, size_t count>
-struct list_remove<list, count, std::enable_if_t<list::size <= count - 1>> {
-    using Type = ct_list<>;
-};
-
-template<size_t... N> requires ((N < 10000000) &&...) || (sizeof...(N) == 0)
-struct ct_list {
-public:
-    static constexpr pkuyo_detail::ct_listData<sizeof...(N)> data{pkuyo_detail::newList<N...>()};
-    static constexpr size_t size = sizeof...(N);
-
-    static constexpr size_t last = data.data[size > 0 ? size -1 :0];
-
-    template<size_t index>
-        requires (index < size)
-    static constexpr size_t value = data.data[index];
+        template<size_t index> requires (index < size)
+        static constexpr size_t value = data.data[index];
 
 
-    template<size_t index>
-        requires (index < size)
-    static constexpr size_t sortValue = data.sortData[index];
+        template<size_t index> requires (index < size)
+        static constexpr size_t sortValue = data.sortData[index];
 
 
-    template<size_t... M>
-    static ct_list<value<M>...> _remove(std::index_sequence<M...>);
+        template<size_t... M>
+        static ct_list<value<M>...> _remove(std::index_sequence<M...>);
 
 
-    template<size_t toFind>
-    static constexpr bool contains = data.contains(toFind);
+        template<size_t toFind>
+        static constexpr bool contains = data.contains(toFind);
 
-    template<size_t app>
-    using Append = std::conditional_t<contains<app>, ct_list<N...>, ct_list<N..., app>>;
+        template<size_t app>
+        using Append = std::conditional_t<contains<app>, ct_list<N...>, ct_list<N..., app>>;
 
-    template<size_t app>
-    using AppendNoUnique = ct_list<N..., app>;
+        template<size_t app>
+        using AppendNoUnique = ct_list<N..., app>;
 
-    template<size_t count>
-        requires (count < size)
-    using Remove = typename list_remove<ct_list<N...>, count>::Type;
+        template<size_t count> requires (count < size)
+        using Remove = typename list_remove<ct_list<N...>, count>::Type;
 
 
-};
+    };
 
-template<size_t... M, size_t ...N>
-auto operator|(ct_list<M...>, ct_list<N...>) {
-    return merge_list_t<ct_list<M...>, ct_list<N...>>();
+    template<size_t... M, size_t ...N>
+    auto operator|(ct_list<M...>, ct_list<N...>) {
+        return merge_list_t<ct_list<M...>, ct_list<N...>>();
+    }
+
+    template<size_t ...N>
+    auto operator|(ct_list<>, ct_list<N...>) {
+        return ct_list < N...>();
+    }
+
+    template<size_t ...N>
+    auto operator|(ct_list<N...>, ct_list<>) {
+        return ct_list < N...>();
+    }
+
+
+    auto operator|(ct_list<>, ct_list<>) {
+        return ct_list < > ();
+    }
 }
-
-template<size_t ...N>
-auto operator|(ct_list<>, ct_list<N...>) {
-    return ct_list < N...>();
-}
-
-template<size_t ...N>
-auto operator|(ct_list<N...>, ct_list<>) {
-    return ct_list <N...>();
-}
-
-
-auto operator|(ct_list<>, ct_list<>) {
-    return ct_list <> ();
-}
-
 #endif //COMPILETIMEDFA_CT_LIST_H
