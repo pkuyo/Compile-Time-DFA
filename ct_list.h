@@ -205,10 +205,12 @@ public:
     static constexpr size_t last = data.data[size > 0 ? size -1 :0];
 
     template<size_t index>
+        requires (index < size)
     static constexpr size_t value = data.data[index];
 
 
     template<size_t index>
+        requires (index < size)
     static constexpr size_t sortValue = data.sortData[index];
 
 
@@ -226,6 +228,7 @@ public:
     using AppendNoUnique = ct_list<N..., app>;
 
     template<size_t count>
+        requires (count < size)
     using Remove = typename list_remove<ct_list<N...>, count>::Type;
 
 

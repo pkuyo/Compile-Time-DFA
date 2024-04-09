@@ -7,7 +7,6 @@
 //Recommended compilation options:
 //  -fconstexpr-loop-limit=1000000000
 //  -fconstexpr-ops-limit=1000000000
-
 #include <iostream>
 #include "ct_regex.h"
 

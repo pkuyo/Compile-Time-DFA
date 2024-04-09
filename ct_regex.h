@@ -31,17 +31,17 @@ class CompileTimeNode {
 private:
 
     template<typename T/*DfaNode*/, size_t ...N>
-    constexpr CompileTimeNode(T, __int64 index, bool isEnd, std::index_sequence<N...>,const uint8_t (&letterMap)[256]) : index(index), isEnd(isEnd) {
+    constexpr CompileTimeNode(T, __int64 index, bool isEnd, std::index_sequence<N...>,const int16_t (&letterMap)[256]) : index(index), isEnd(isEnd) {
         std::fill(connects,connects+letterLength,-1);
         (AddNewPath(T::ConnectionChecks::template value<N>, T::Connections::template value<N>,letterMap), ...);
     }
 
     template<size_t length>
-    constexpr CompileTimeNode(const uint8_t (&stateChecks)[length],const __int64(&stateConnects)[length],__int64 index, bool isEnd)
+    constexpr CompileTimeNode(const int16_t (&stateChecks)[length],const __int64(&stateConnects)[length],__int64 index, bool isEnd)
     : index(index), isEnd(isEnd) {
         std::fill(connects,connects+letterLength,-1);
         for(int i=0;i<length;i++){
-            if(stateChecks[i] == 255) break;
+            if(stateChecks[i] == -1) break;
             AddNewPath(stateChecks[i],stateConnects[i]);
         }
     }
@@ -50,7 +50,7 @@ private:
         connectLength++;
     }
 
-    constexpr void AddNewPath(char c, __int64 toIndex,const uint8_t (&letterMap)[256]) {
+    constexpr void AddNewPath(char c, __int64 toIndex,const int16_t (&letterMap)[256]) {
         connects[letterMap[c]] = toIndex;
         connectLength++;
     }
@@ -88,18 +88,18 @@ public:
     static constexpr auto rawString = cts;
     constexpr static size_t size = length;
 
-    uint8_t letterMap[256]{0};
+    int16_t letterMap[256]{0};
 
 private:
 
 
     struct MinimizeData
     {
-        uint8_t stateChecks[length][letterLength]{0};
+        int16_t stateChecks[length][letterLength]{0};
         __int64 stateConnects[length][letterLength]{0};
-        int8_t stateFlags[length];
+        int16_t stateFlags[length];
         size_t minimizeLength = 0;
-        constexpr MinimizeData(uint8_t (&inChecks)[length][letterLength], __int64(&inConnects)[length][letterLength],  int8_t (&inFlags)[length],size_t newSize) : minimizeLength(newSize)
+        constexpr MinimizeData(int16_t (&inChecks)[length][letterLength], __int64(&inConnects)[length][letterLength],  int16_t (&inFlags)[length],size_t newSize) : minimizeLength(newSize)
         {
             for(int i=0;i<size;i++) {
                 std::copy(inChecks[i],inChecks[i]+letterLength,stateChecks[i]);
@@ -119,6 +119,7 @@ private:
 
     template<typename StateList/*ct_list<>*/,typename Graph, size_t ...N>
     consteval CompileTimeDfa(StateList,std::index_sequence<N...>, Graph) {
+        std::fill(letterMap,letterMap+256,(int16_t)-1);
         for(size_t i =0;i < StateList::size;i++)
             letterMap[StateList::data[i]] = i;
         (CreateExecuteDfa_single_impl<Graph, N>(this), ...);
@@ -126,7 +127,8 @@ private:
     }
 
     template<typename StateList/*ct_list<>*/,size_t size,size_t charLength>
-    consteval CompileTimeDfa(StateList,const uint8_t (&stateChecks)[size][charLength],const __int64(&stateConnects)[size][charLength], const int8_t (&stateFlags)[size]) {
+    consteval CompileTimeDfa(StateList,const int16_t (&stateChecks)[size][charLength],const __int64(&stateConnects)[size][charLength], const int16_t (&stateFlags)[size]) {
+        std::fill(letterMap,letterMap+256,(int16_t)-1);
         for(size_t i =0;i < StateList::size;i++)
             letterMap[StateList::data[i]] = i;
 
@@ -138,22 +140,14 @@ private:
 
     }
 
-    consteval static uint8_t Dfs_findUnreachable(const CompileTimeDfa & dfa,__int64 reachable[],int currentNode = 0)
+    consteval static void Dfs_findUnreachable(const CompileTimeDfa & dfa,__int64 (&reachable)[size],int currentNode = 0)
     {
-        uint8_t result = 0;
-        reachable[currentNode] = 0;
+        reachable[currentNode] =  dfa.nodes[currentNode].IsEnd() ? 1 : 0;
         for(int i=0;i<letterLength;i++){
             if(dfa.nodes[currentNode].connects[i] == -1) continue;
-            if(reachable[dfa.nodes[currentNode].connects[i]] == -2)
-                result =std::max(result,Dfs_findUnreachable(dfa,reachable,dfa.nodes[currentNode].connects[i]));
+            if(reachable[dfa.nodes[currentNode].connects[i]] == -1)
+                Dfs_findUnreachable(dfa,reachable,dfa.nodes[currentNode].connects[i]);
         }
-        if(dfa.nodes[currentNode].IsEnd()) {
-            result = 1;
-            reachable[currentNode] = 1;
-            return result;
-        }
-        //reachable[currentNode] += result;
-        return result;
     }
 
     template<typename MoveList,size_t size>
@@ -161,21 +155,19 @@ private:
     {
         //old state node map to new state
         __int64 statesMap[size]{0};
+        std::fill(statesMap,statesMap+size,-1);
+        //if newStates[i]<0 it's a reachable node
+        Dfs_findUnreachable(dfa,statesMap,0);
 
         __int64 statesReverseMap[size][size]{0};
-        __int64 newStatesLength = 2;
+        __int64 newStatesCount = 2;
 
         // 1 -> End 2-> Start
-        int8_t statesFlag[size]{0};
+        int16_t statesFlag[size]{0};
 
         //old state node in new state length
         __int64 statesLength[size]{0};
 
-
-        std::fill(statesMap,statesMap+size,-2);
-
-        //if newStates[i]<0 it's a reachable node
-        Dfs_findUnreachable(dfa,statesMap,0);
 
         //init new state group : end / not-end state group
         for(size_t i = 0; i < size; i++) {
@@ -184,72 +176,76 @@ private:
             }
         }
 
+        bool needCheckAgain = false;
+        do {
+            needCheckAgain = false;
+            for(size_t i = 0; i < MoveList::size; i++){
+                auto c = i;
+                auto lastNewLength = newStatesCount;
 
-        for(size_t i = 0; i < MoveList::size;i++){
-            auto c = i;
-            auto lastNewLength = newStatesLength;
+                for(size_t j = 0;j < lastNewLength; j++){
 
-            for(size_t j = 0;j < lastNewLength;j++){
+                    //group state move to ...
+                    __int64 tmpMoveTo[size]{0};
+                    size_t tmpMoveToLength = 0;
 
-                //group state move to ...
-                __int64 tmpMoveTo[size]{0};
-                size_t tmpMoveToLength = 0;
+                    auto lastState = statesLength[j];
+                    auto LastLength = newStatesCount - 1;
 
+                    //separate single group
+                    for(size_t k = 0; k < statesLength[j]; k++){
+                        auto nodeIndex = statesReverseMap[j][k];
 
-                auto lastState = statesLength[j];
-                auto LastLength =  newStatesLength - 1;
-                //separate single group
-                for(size_t k = 0; k < statesLength[j];k ++){
-                    auto nodeIndex = statesReverseMap[j][k];
+                        __int64 moveTo = dfa.nodes[nodeIndex].connects[c] == -1 ? -1 : statesMap[dfa.nodes[nodeIndex].connects[c]];
 
+                        size_t moveIndex = 0;
+                        for(; moveIndex < tmpMoveToLength; moveIndex++)
+                            if(tmpMoveTo[moveIndex] == moveTo)
+                                break;
 
-                    __int64 moveTo = -1;
-                    if(dfa.nodes[nodeIndex].connects[c] != -1)
-                        moveTo = statesMap[dfa.nodes[nodeIndex].connects[c]];
-
-                    size_t moveIndex = 0;
-                    for(moveIndex = 0; moveIndex< tmpMoveToLength;moveIndex++)
-                        if(tmpMoveTo[moveIndex] == moveTo)
-                            break;
-
-                    if(moveIndex == tmpMoveToLength){
-                        tmpMoveTo[tmpMoveToLength++] = moveTo;
-                        if(moveIndex != 0)
-                            newStatesLength++;
+                        if(moveIndex == tmpMoveToLength){
+                            tmpMoveTo[tmpMoveToLength++] = moveTo;
+                            if(moveIndex != 0) {
+                                newStatesCount++;
+                                needCheckAgain = true;
+                            }
+                        }
+                        //separate state
+                        if(moveIndex != 0){
+                            auto newStateIndex = LastLength+moveIndex;
+                            statesMap[nodeIndex] = newStateIndex;
+                            statesReverseMap[newStateIndex][statesLength[newStateIndex]++] = nodeIndex;
+                            statesReverseMap[j][k] = -1;
+                            statesLength[j]--;
+                        }
                     }
-                    //separate state
-                    if(moveIndex != 0){
-                        auto newStateIndex = LastLength+moveIndex;
-                        statesMap[nodeIndex] = newStateIndex;
-                        statesReverseMap[newStateIndex][statesLength[newStateIndex]++] = nodeIndex;
-                        statesReverseMap[j][k] = -1;
-                        statesLength[j]--;
+
+                    //clean empty slot
+                    size_t insertPos[lastState]{0};
+                    size_t insertEnd = 0;
+                    size_t insertStart = 0;
+                    for(size_t k = 0; k< lastState; k++){
+                        if(statesReverseMap[j][k] == -1){
+                            insertPos[insertEnd++] = k;
+                        }
+                        else if(insertStart!=insertEnd) {
+                            statesReverseMap[j][insertPos[insertStart++]] = statesReverseMap[j][k];
+                            statesReverseMap[j][k--] = -1;
+                        }
                     }
+
                 }
-
-                //clean empty slot
-                size_t insertPos[size]{0};
-                size_t insertEnd = 0;
-                size_t insertStart = 0;
-                for(size_t k = 0; k< lastState;k++){
-                    if(statesReverseMap[j][k]== -1){
-                        insertPos[insertEnd++] = k;
-                    }
-                    else if(insertStart!=insertEnd) {
-                        statesReverseMap[j][insertPos[insertStart++]] = statesReverseMap[j][k];
-                    }
-                }
-
             }
-        }
+        } while (needCheckAgain);
+
         //new state node connect to
         __int64 statesConnect[size][MoveList::size]{0};
         //new state node connect check char
-        uint8_t statesCheck[size][MoveList::size]{0};
+        int16_t statesCheck[size][MoveList::size]{0};
 
         __int64 statesConnectLength[size]{0};
 
-        for(size_t i = 0;i< newStatesLength;i++){
+        for(size_t i = 0; i < newStatesCount; i++){
             for(size_t j = 0; j< MoveList::size;j++){
                 auto c = j;
                 if(dfa.nodes[statesReverseMap[i][0]].connects[c] == -1|| statesMap[dfa.nodes[statesReverseMap[i][0]].connects[c]] < 0) continue;
@@ -257,7 +253,7 @@ private:
                 statesCheck[i][statesConnectLength[i]++] = c;
             }
             if(statesConnectLength[i] != MoveList::size)
-                statesCheck[i][statesConnectLength[i]] = 255; //set end
+                statesCheck[i][statesConnectLength[i]] = -1; //set end
             for(int j = 0;j< statesLength[i];j++){
                 if(dfa.nodes[statesReverseMap[i][j]].IsEnd())
                     statesFlag[i] |= 1;
@@ -268,7 +264,7 @@ private:
 
         }
 
-        return MinimizeData(statesCheck, statesConnect,statesFlag, newStatesLength);
+        return MinimizeData(statesCheck, statesConnect, statesFlag, newStatesCount);
     }
 
 public:
@@ -277,6 +273,8 @@ public:
         __int64 node = startIndex;
         __int64 index = 0;
         while (index != view.size()) {
+            if(letterMap[view[index]] == -1)
+                return false;
             node = nodes[node].NextPath(letterMap[view[index++]]);
             if (node == -1)
                 return false;
@@ -347,7 +345,7 @@ namespace pkuyo_detail {
     {
         switch(c)
         {
-            case REC_OR:return '+';
+            case REC_OR:return '|';
             case REC_AND: return '&';
             case REC_ANY:return '*';
             case REC_MAY:return '?';
@@ -416,12 +414,14 @@ namespace pkuyo_detail {
 
                 //change [] to ()
                 if constexpr (cts.First() == REC_L_SQUARE)
-                    return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>().Insert(REC_L_ROUND), out,REC_OR>();
+                    return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>(), out,REC_OR>();
                 else if constexpr (cts.First() == REC_R_SQUARE)
-                    return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>().Insert(REC_R_ROUND), out,REC_AND>();
+                    return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>(), out,REC_AND>();
         }
         // default symbol (without '(')
-        else if constexpr (out.size == 1 || IsExecSymbol(cts.First()) || IsLatePreprocessSymbol(cts.First())) {
+        else if constexpr (out.size == 1 ||
+                            ((IsExecSymbol(cts.First()) || IsLatePreprocessSymbol(cts.First())) &&
+                            !IsLeftBracket(cts.First()))) {
             return ctPreprocess_InsertOpera<cts.template SubStr<1, cts.size - 1>(), out.Append(cts.First()),insertChar>();
         } else if constexpr (IsLatePreprocessSymbol(out.Last())) {
 
@@ -457,6 +457,8 @@ namespace pkuyo_detail {
     //parse (A) + to (A)(A)*
     template<ct_stringData cts, ct_stringData out = "",ct_stringData indexData = "">
     consteval auto ctPreprocess_Parse() {
+
+
         if constexpr (cts.size == 1) {
             return CompileTimeString<out>();
         }
@@ -465,26 +467,43 @@ namespace pkuyo_detail {
             if constexpr (IsRightBracket(out.Last())) {
                 constexpr auto str = out.template SubStr<indexData.Last(),out.size - indexData.Last()>();
                 return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),
-                        out.Append(str).Append(REC_ANY),
+                        out.Append(REC_AND).Append(str).Append(REC_ANY),
                         indexData.template SubStr<0, indexData.size - 1>()>();
             }
             else
                 return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(out.Last()).Append(REC_ANY),
                         indexData>();
         }
-        else if constexpr (IsLeftBracket(cts.First()))
-            return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(cts.First()),indexData.Append(out.size-1)>();
+        else if constexpr (IsLeftBracket(cts.First())) {
+            // '[' --> '(['
+            if constexpr (cts.First() == REC_L_SQUARE) {
+                return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(), out.Append(REC_L_ROUND).Append(
+                        cts.First()),
+                        indexData.Append(out.size - 1)>();
+            } else {
+                return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(), out.Append(
+                        cts.First()), indexData.Append(out.size - 1)>();
+            }
+        }
+        // ']' --> ')]'
+        else if constexpr (cts.First() == REC_R_SQUARE) {
+            return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(), out.Append(REC_R_ROUND).Append(
+                    cts.First()),
+                    indexData>();
+        }
+        //Very annoying special sentence
         else if constexpr (out.size == 1)
             return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(cts.First()),indexData>();
-        else
-        {
-            if constexpr (IsRightBracket(out.Last()))
-                return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(cts.First()),
-                        indexData.template SubStr<0, indexData.size - 1>()>();
-            else
-                return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(cts.First()),indexData>();
-
+        //clean index
+        else if constexpr (IsRightBracket(out.Last())) {
+            return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(), out.Append(cts.First()),
+                    indexData.template SubStr<0, indexData.size - 1>()>();
         }
+
+        else
+            return ctPreprocess_Parse<cts.template SubStr<1, cts.size - 1>(),out.Append(cts.First()),indexData>();
+
+
     }
 
     //preprocess input regex
@@ -734,14 +753,9 @@ namespace pkuyo_detail {
         } else if constexpr (cts.First() == REC_R_ROUND) {
 
             if constexpr (symbol.Last() == REC_L_ROUND) {
-                if constexpr (NfaStack::size == 1)
-                    return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.template SubStr<0,
-                            symbol.size - 1>(), NfaStack, NfaGraph>();
-                else
-                    return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.template SubStr<0,
-                            symbol.size - 1>().Append(REC_AND), NfaStack, NfaGraph>();
+                return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.template SubStr<0,
+                        symbol.size - 1>(), NfaStack, NfaGraph>();
             } else {
-                static_assert(NfaStack::size >= IsSingle(symbol.Last()) ? 1: 2,"Invalid Regex expression");
                 using Exec = nfaExecute::NfaExecute<symbol.Last(), NfaGraph, NfaStack>;
                 return connectNfa<cts, symbol.template SubStr<0,
                         symbol.size - 1>(), typename Exec::OutStack, typename Exec::OutGraph>();
@@ -756,12 +770,10 @@ namespace pkuyo_detail {
             } else if constexpr (symbol.size == 1) {
                 return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.Append(
                         cts.First()), NfaStack, NfaGraph>();
-            } else if constexpr (SymbolSpeed(cts.First()) >= SymbolSpeed(symbol.Last())) {
+            } else if constexpr (SymbolSpeed(cts.First()) >= SymbolSpeed(symbol.Last()) || IsLeftBracket(cts.First())) {
                 return connectNfa<cts.template SubStr<1, cts.size - 1>(), symbol.Append(
                         cts.First()), NfaStack, NfaGraph>();
             } else {
-
-
                 using Exec = nfaExecute::NfaExecute<symbol.Last(), NfaGraph, NfaStack>;
                 return connectNfa<cts, symbol.template SubStr<0,
                         symbol.size - 1>(), typename Exec::OutStack, typename Exec::OutGraph>();
